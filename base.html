@@ -42,8 +42,8 @@
     <h2>How should left/right reach the stand?</h2>
     <label>Output
       <select id="mode">
-        <option value="keys">Click Mbit's ◀ ▶ buttons (needs keys.py running)</option>
-        <option value="uart">Web Bluetooth → micro:bit UART</option>
+        <option value="uart">Bluetooth → micro:bit, same commands as the Mbit app (no app needed)</option>
+        <option value="keys">Click the Mbit app's ◀ ▶ buttons (needs keys.py running)</option>
         <option value="event">Web Bluetooth → micro:bit Event service</option>
         <option value="none">Nothing (just test the connection)</option>
       </select>
@@ -65,11 +65,17 @@
 
     <div data-for="uart" hidden>
       <p class="note">
-        Sends <code>L</code>, <code>R</code> or <code>S</code> (stop), each followed by a newline.
-        On the micro:bit use <em>on bluetooth data received (new line)</em> with the Bluetooth
-        extension and <em>bluetooth uart service</em> started. Pair the micro:bit (or use a
-        "No pairing required" project setting) first.
+        Talks to the micro:bit directly, sending the same text commands the Mbit app sends:
+        ◀ sends <code>C#</code>, ▶ sends <code>D#</code>, and letting go sends <code>0#</code>.
+        <strong>Close the Mbit app first</strong> — the micro:bit only accepts one Bluetooth connection.
+        Needs Chrome or Edge.
       </p>
+      <div class="grid" style="margin-top:10px">
+        <label>◀ command <input id="uart-left" value="C#"></label>
+        <label>▶ command <input id="uart-right" value="D#"></label>
+        <label>Stop command <input id="uart-stop" value="0#"></label>
+      </div>
+      <p class="note">Mbit's spin buttons use <code>E#</code> / <code>F#</code> if you want the stand to spin instead.</p>
     </div>
 
     <div data-for="event" hidden>
@@ -132,7 +138,7 @@ const store = {
 };
 
 const modeSel = $('mode');
-modeSel.value = store.get('mode', 'keys');
+modeSel.value = store.get('mode', 'uart');
 $('helper-url').value = store.get('helper',
   location.protocol === 'http:' && /^(localhost|127\.0\.0\.1)$/.test(location.hostname)
     ? location.origin : 'http://localhost:8765');
@@ -199,25 +205,12 @@ function btWrite(char, bytes) {
   return writeChain;
 }
 
-$('bt-connect').addEventListener('click', async () => {
-  if (!navigator.bluetooth) {
-    setOutput(false, 'No Web Bluetooth');
-    log('This browser has no Web Bluetooth. Use Chrome or Edge on desktop.');
-    return;
-  }
-  try {
-    const device = await navigator.bluetooth.requestDevice({
-      filters: [{ namePrefix: 'BBC micro:bit' }],
-      optionalServices: [UUID.uartService, UUID.eventService],
-    });
-    device.addEventListener('gattserverdisconnected', () => {
-      bt = { device: null, uartRx: null, clientEvent: null };
-      setOutput(false, 'micro:bit disconnected');
-      log('micro:bit disconnected');
-    });
-    setOutput(false, 'Connecting…');
-    const server = await device.gatt.connect();
-    bt = { device, uartRx: null, clientEvent: null };
+let btWanted = false; // false once the user clicks Disconnect, so we stop reconnecting
+
+async function connectGatt(device) {
+  setOutput(false, 'Connecting…');
+  const server = await device.gatt.connect();
+  bt = { device, uartRx: null, clientEvent: null };
 
     try {
       const uart = await server.getPrimaryService(UUID.uartService);
@@ -232,15 +225,51 @@ $('bt-connect').addEventListener('click', async () => {
       bt.clientEvent = await ev.getCharacteristic(UUID.clientEvent);
     } catch { /* Event service not in this program */ }
 
-    log(`Connected to ${device.name}. UART: ${bt.uartRx ? 'yes' : 'no'}, Event service: ${bt.clientEvent ? 'yes' : 'no'}`);
-    refreshOutputStatus();
+  log(`Connected to ${device.name}. UART: ${bt.uartRx ? 'yes' : 'no'}, Event service: ${bt.clientEvent ? 'yes' : 'no'}`);
+  refreshOutputStatus();
+}
+
+$('bt-connect').addEventListener('click', async () => {
+  if (!navigator.bluetooth) {
+    setOutput(false, 'No Web Bluetooth');
+    log('This browser has no Web Bluetooth. Use Chrome or Edge on desktop.');
+    return;
+  }
+  try {
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'BBC micro:bit' }],
+      optionalServices: [UUID.uartService, UUID.eventService],
+    });
+    if (bt.device && bt.device !== device) bt.device.gatt.disconnect();
+    btWanted = true;
+    device.addEventListener('gattserverdisconnected', () => onBtDisconnected(device));
+    await connectGatt(device);
   } catch (err) {
     setOutput(false, 'Bluetooth failed');
     log(`Bluetooth: ${err.message}`);
   }
 });
 
-$('bt-disconnect').addEventListener('click', () => bt.device?.gatt.disconnect());
+async function onBtDisconnected(device) {
+  if (bt.device === device) bt = { device: null, uartRx: null, clientEvent: null };
+  setOutput(false, 'micro:bit disconnected');
+  log('micro:bit disconnected');
+  // The stand may just have dropped out of range or been power-cycled: keep trying.
+  for (let attempt = 1; btWanted && !device.gatt.connected; attempt++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    if (!btWanted) return;
+    try {
+      await connectGatt(device);
+    } catch (err) {
+      if (attempt === 1 || attempt % 15 === 0) log(`Reconnecting to micro:bit… (${err.message})`);
+    }
+  }
+}
+
+$('bt-disconnect').addEventListener('click', () => {
+  btWanted = false;
+  bt.device?.gatt.disconnect();
+});
 
 function refreshOutputStatus() {
   const mode = modeSel.value;
@@ -260,6 +289,11 @@ function sendEvent(value) {
   return btWrite(bt.clientEvent, bytes);
 }
 
+function sendUart(text) {
+  if (!bt.uartRx || !text) return;
+  return btWrite(bt.uartRx, new TextEncoder().encode(text));
+}
+
 const outputs = {
   none: { start() {}, refresh() {}, stop() {} },
   keys: {
@@ -269,9 +303,9 @@ const outputs = {
     stop: (dir) => helper(`/press?dir=${dir}&state=up`).catch((e) => log(`Helper: ${e.message}`)),
   },
   uart: {
-    start: (dir) => bt.uartRx && btWrite(bt.uartRx, new TextEncoder().encode(dir === 'left' ? 'L\n' : 'R\n')),
+    start: (dir) => sendUart($(`uart-${dir}`).value),
     refresh() {},
-    stop: () => bt.uartRx && btWrite(bt.uartRx, new TextEncoder().encode('S\n')),
+    stop: () => sendUart($('uart-stop').value),
   },
   event: {
     start: (dir) => bt.clientEvent && sendEvent($(`ev-${dir}-down`).value),

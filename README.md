@@ -25,35 +25,43 @@ The computer doesn't need the hosted copy (see step 2).
 
 ## 2. Computer (Bluetooth base)
 
-Open the Mbit app and connect it to the stand. Then, **once**, show the helper where Mbit's buttons are:
+**Close the Mbit app** (the micro:bit only accepts one Bluetooth connection), then in **Chrome or Edge** open:
 
-```sh
-python3 keys.py --calibrate     # hover over ◀, press Enter; hover over ▶, press Enter
-```
+**https://lucasschappi.github.io/lego-presence/base.html?room=YOURROOM**
 
-After that, each time:
+Click **Connect micro:bit**, pick your micro:bit, and use **Test ◀ / Test ▶** to check the stand moves.
+The page sends the same Bluetooth commands as the Mbit app, over the micro:bit's UART service:
 
-```sh
-python3 keys.py
-```
+| Button | Command |
+|---|---|
+| ◀ pressed | `C#` |
+| ▶ pressed | `D#` |
+| released | `0#` |
 
-Open **http://localhost:8765/base.html?room=YOURROOM** in Chrome or Edge, then choose an output:
+(Mbit's spin buttons use `E#` / `F#`; you can change the commands on the page.) If the micro:bit
+drops out, the page keeps trying to reconnect until you click **Disconnect**.
+
+### Other outputs
 
 | Output | What it does |
 |---|---|
-| **Click Mbit's ◀ ▶ buttons** (default) | While the remote person holds a button, `keys.py` brings Mbit to the front, holds the mouse down on Mbit's matching button, then puts your pointer back |
-| **Web Bluetooth → UART** | Sends `L`, `R`, `S` (stop) lines straight to the micro:bit (no Mbit app) |
-| **Web Bluetooth → Event service** | Sends (source, value) events straight to the micro:bit |
+| **Click the Mbit app's ◀ ▶ buttons** | `keys.py` holds the mouse on Mbit's on-screen buttons (see below) |
+| **Web Bluetooth → Event service** | Sends (source, value) events, for your own micro:bit program |
 | **Nothing** | Only shows the arrows on screen, for testing the connection |
 
-- **Don't move or resize the Mbit window** after calibrating; if you do, run `--calibrate` again.
-- The helper takes over the mouse while someone drives, so leave the computer alone during a session.
-- **macOS:** the first time, allow your terminal app under System Settings → Privacy & Security →
-  **Accessibility**, then restart `keys.py`. Without that permission, macOS silently ignores the clicks.
-- `python3 keys.py --mode keys` presses the ← / → keys instead, for apps that use the keyboard.
+<details><summary>Using keys.py with the Mbit app instead</summary>
 
-The **Test ◀ / Test ▶** buttons on the page nudge the stand for half a second, so you can check
-it works before bringing in the remote person.
+```sh
+python3 keys.py --calibrate     # hover over Mbit's ◀, press Enter; hover over ▶, press Enter
+python3 keys.py                 # then open http://localhost:8765/base.html?room=YOURROOM
+```
+
+- Don't move or resize the Mbit window after calibrating.
+- The helper takes over the mouse while someone drives.
+- macOS: allow your terminal app under System Settings → Privacy & Security → Accessibility.
+- `--mode keys` presses the ← / → keys instead.
+
+</details>
 
 ## 3. Phone on the stand
 
@@ -70,27 +78,13 @@ the stand are ready.
 ## Safety
 
 - If commands stop arriving for 0.5 s (dropped connection, closed tab), `base.html` stops the stand.
-- `keys.py` also lets go of the mouse button after 0.6 s without a refresh.
-- `keys.py` only listens on `127.0.0.1` and only accepts requests from localhost pages. To use a
+- `keys.py` (if used) lets go of the mouse after 0.6 s without a refresh, and only listens on `127.0.0.1` and only accepts requests from localhost pages. To use a
   hosted `base.html` instead, add `--allow-origin https://your-site`.
 
-## micro:bit code for the Web Bluetooth modes (MakeCode)
+## micro:bit code for the Event service mode (MakeCode)
 
-The Mbit app and the browser can't both be connected to the micro:bit at the same time.
-
-UART mode (needs the Bluetooth extension):
-
-```js
-bluetooth.startUartService()
-bluetooth.onUartDataReceived(serial.delimiters(Delimiters.NewLine), function () {
-    const cmd = bluetooth.uartReadUntil(serial.delimiters(Delimiters.NewLine))
-    if (cmd == "L") { /* motor left */ }
-    else if (cmd == "R") { /* motor right */ }
-    else { /* stop */ }
-})
-```
-
-Event mode (the defaults on the page are source 9010, values 1–4):
+The page's default mode needs no changes: it works with the program the Mbit app already talks to.
+For your own program using the Event service (defaults: source 9010, values 1–4):
 
 ```js
 control.onEvent(9010, EventBusValue.MICROBIT_EVT_ANY, function () {
@@ -105,4 +99,4 @@ control.onEvent(9010, EventBusValue.MICROBIT_EVT_ANY, function () {
 
 - Connections use public STUN only, with no TURN relay. Most home and mobile networks work.
   Some strict corporate or school networks will block the video.
-- Web Bluetooth needs Chrome or Edge on desktop. The key-press mode works in any browser on the computer.
+- The computer needs Chrome or Edge (Web Bluetooth). Safari and Firefox can't talk to the micro:bit.
