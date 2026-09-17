@@ -14,7 +14,8 @@
     border-radius: 10px; border: 2px solid rgba(255,255,255,.4); transform: scaleX(-1);
   }
   .stage .chips { position: absolute; top: 12px; left: 12px; right: 12px; }
-  #start-panel { position: absolute; inset: 0; }
+  #start-panel, #reconnecting { position: absolute; inset: 0; }
+  #reconnecting { pointer-events: none; background: rgba(0,0,0,.35); }
 
   .controls {
     display: flex; align-items: center; justify-content: center; gap: 16px;
@@ -48,7 +49,9 @@
       <span class="chip" id="phone">Phone</span>
       <span class="chip" id="base">Computer</span>
       <span class="chip" id="stand">Stand</span>
+      <span class="chip" id="stats" hidden></span>
     </div>
+    <div id="reconnecting" class="center" hidden><div class="card"><p style="margin:0">Video dropped — reconnecting…</p></div></div>
     <div id="start-panel" class="center">
       <div class="card">
         <h1>🕹️ Drive · <span data-room></span></h1>
@@ -87,10 +90,7 @@ let conn = null, connStarted = 0;
 
 document.getElementById('start').addEventListener('click', async () => {
   try {
-    localStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: { echoCancellation: true, noiseSuppression: true },
-    });
+    localStream = await getCameraAndMic('');
   } catch (err) {
     document.getElementById('start-text').textContent =
       `Camera/mic blocked: ${err.message}. Allow access and reload.`;
@@ -132,22 +132,50 @@ function dialPhone() {
   setChip('phone', 'Phone: calling…', 'wait');
   const c = peer.call(ids.phone, localStream);
   call = c; callStarted = Date.now(); callLive = false;
+  tuneVideo(c, 800_000);
   c.on('stream', (stream) => {
     if (c !== call) return;
     callLive = true;
+    $reconnecting.hidden = true;
     remoteVideo.srcObject = stream;
+    startStats(c);
     remoteVideo.play().catch(() => {});
     setChip('phone', 'Phone: live', 'ok');
   });
   const end = () => {
     if (c !== call) return;
+    const wasLive = callLive;
     call = null; callLive = false;
-    remoteVideo.srcObject = null;
-    setChip('phone', 'Phone: offline', 'bad');
+    stopStats();
+    // Keep the last frame on screen and redial straight away rather than going black.
+    $reconnecting.hidden = !wasLive;
+    setChip('phone', 'Phone: reconnecting…', 'bad');
+    setTimeout(tick, 500);
   };
   c.on('close', end);
   c.on('error', end);
   watchIce(c, () => { end(); c.close(); });
+}
+
+// ---- Connection stats -------------------------------------------------------
+
+const $reconnecting = document.getElementById('reconnecting');
+let statsTimer = null;
+
+function startStats(c) {
+  stopStats();
+  const read = makeStatsReader(c.peerConnection);
+  const chip = document.getElementById('stats');
+  chip.hidden = false;
+  statsTimer = setInterval(async () => {
+    const s = await read().catch(() => null);
+    if (s) setChip('stats', `📶 ${s.text}`, s.bad ? 'bad' : 'ok');
+  }, 1000);
+}
+
+function stopStats() {
+  clearInterval(statsTimer);
+  document.getElementById('stats').hidden = true;
 }
 
 function dialBase() {

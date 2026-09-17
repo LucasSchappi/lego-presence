@@ -62,10 +62,7 @@ function showIdle(text) {
 
 document.getElementById('start').addEventListener('click', async () => {
   try {
-    localStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: { echoCancellation: true, noiseSuppression: true },
-    });
+    localStream = await getCameraAndMic('motion'); // the stand turns, so this camera moves
   } catch (err) {
     idleText.textContent = `Camera/mic blocked: ${err.message}. Allow access and reload.`;
     return;
@@ -100,6 +97,7 @@ function connect() {
     currentCall = call;
     setChip('call', 'Incoming…', 'wait');
     call.answer(localStream);
+    tuneVideo(call, 1_000_000);
 
     call.on('stream', (stream) => {
       if (call !== currentCall) return;
