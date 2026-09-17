@@ -7,7 +7,14 @@
 <title>Presence · Phone</title>
 <link rel="stylesheet" href="style.css">
 <style>
-  #remote { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  #grid { position: fixed; inset: 0; display: grid; gap: 2px; background: #000; }
+  .tile { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+  .tile video { width: 100%; height: 100%; object-fit: cover; }
+  .tile .name {
+    position: absolute; left: 10px; bottom: 10px; padding: 2px 10px; border-radius: 99px;
+    background: rgba(0,0,0,.55); font-size: 0.9rem;
+  }
+  .tile .name:empty { display: none; }
   #self {
     position: fixed; right: 12px; bottom: 12px; width: 22vw; max-width: 140px;
     border-radius: 10px; border: 2px solid rgba(255,255,255,.4); transform: scaleX(-1);
@@ -26,7 +33,7 @@
 </form>
 
 <div id="app">
-  <video id="remote" autoplay playsinline></video>
+  <div id="grid"></div>
   <video id="self" autoplay playsinline muted hidden></video>
 
   <div id="idle" class="center">
@@ -48,12 +55,16 @@
 <script src="common.js"></script>
 <script>
 const room = getRoomOrShowForm();
-const remoteVideo = document.getElementById('remote');
+const grid = document.getElementById('grid');
 const selfVideo = document.getElementById('self');
 const idle = document.getElementById('idle');
 const idleText = document.getElementById('idle-text');
 let localStream = null;
-let currentCall = null;
+const MAX_DRIVERS = 4;
+const TOTAL_BITRATE = 1_200_000; // shared between drivers so the phone's upload doesn't choke
+const calls = new Map();         // driver peer id → { call, tile, setBitrate, live }
+const diagConns = new Map();     // driver peer id → data connection
+const turnedAway = new Map();    // driver peer id → time we last refused them (phone full)
 
 function showIdle(text) {
   idle.hidden = false;
@@ -87,31 +98,50 @@ function connect() {
 }
 
 function onCall(call) {
-  // Only one caller at a time: the newest wins.
-  diag.log('incoming call');
-  const previous = currentCall;
-  currentCall = call;
-  previous?.close();
-  setChip('call', 'Incoming…', 'wait');
+  const id = call.peer;
+  const name = String(call.metadata?.name || '').slice(0, 30);
+  diag.log(`incoming call from ${name || id.slice(0, 8)} (${calls.size} already)`);
+
+  // The same driver redialling replaces its own old call; anyone else joins the grid.
+  const previous = calls.get(id);
+  if (!previous && calls.size >= MAX_DRIVERS) {
+    diag.log('phone full, turning caller away');
+    turnedAway.set(id, Date.now());
+    diagConns.get(id)?.send({ type: 'full', max: MAX_DRIVERS });
+    call.close();
+    return;
+  }
+  turnedAway.delete(id);
+  if (previous) {
+    calls.delete(id);
+    previous.call.close();
+  }
+
+  const tile = previous?.tile || makeTile();
+  tile.querySelector('.name').textContent = name;
+  const entry = { call, tile, live: false, setBitrate: null };
+  calls.set(id, entry);
+
   call.answer(localStream);
-  tuneVideo(call, 1_000_000);
-  logConnection(call.peerConnection, 'call');
+  entry.setBitrate = tuneVideo(call, TOTAL_BITRATE);
+  logConnection(call.peerConnection, `call[${name || id.slice(0, 8)}]`);
+  layout();
 
   onCallConnected(call, (stream) => {
-    if (call !== currentCall) return;
-    remoteVideo.srcObject = stream;
-    remoteVideo.play().catch(() => {});
-    idle.hidden = true;
-    setChip('call', 'In call', 'ok');
+    if (calls.get(id) !== entry) return;
+    entry.live = true;
+    const video = tile.querySelector('video');
+    video.srcObject = stream;
+    video.play().catch(() => {});
+    layout();
   });
 
   const end = (why) => {
-    if (call !== currentCall) return;
-    diag.log(`call ended (${why})`);
-    currentCall = null;
-    remoteVideo.srcObject = null;
-    setChip('call', 'No call', 'bad');
-    showIdle('Call ended. Waiting for the remote person to call…');
+    if (calls.get(id) !== entry) return;
+    diag.log(`call from ${name || id.slice(0, 8)} ended (${why})`);
+    calls.delete(id);
+    tile.remove();
+    layout();
   };
   call.on('close', () => end('closed'));
   call.on('error', (err) => end(`error ${err.type}`));
@@ -119,16 +149,60 @@ function onCall(call) {
   watchIce(call, () => { end('connection lost'); call.close(); });
 }
 
+function makeTile() {
+  const tile = document.createElement('div');
+  tile.className = 'tile';
+  tile.innerHTML = '<video autoplay playsinline></video><span class="name"></span>';
+  grid.append(tile);
+  return tile;
+}
+
+// Splits the screen between everyone connected, and shares the upload between them.
+function layout() {
+  const n = grid.children.length;
+  const live = [...calls.values()].filter((c) => c.live).length;
+  if (n) {
+    const landscape = innerWidth >= innerHeight;
+    const cols = landscape ? Math.ceil(Math.sqrt(n)) : Math.ceil(n / Math.ceil(Math.sqrt(n)));
+    const rows = Math.ceil(n / cols);
+    grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    grid.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
+  }
+  const each = Math.max(300_000, Math.round(TOTAL_BITRATE / Math.max(1, calls.size)));
+  calls.forEach((c) => c.setBitrate?.(each));
+
+  if (live) {
+    idle.hidden = true;
+    setChip('call', live === 1 ? 'In call' : `In call · ${live} drivers`, 'ok');
+  } else if (calls.size) {
+    setChip('call', 'Connecting…', 'wait');
+  } else {
+    setChip('call', 'No call', 'bad');
+    if (localStream) showIdle('Waiting for the remote person to call…');
+  }
+}
+addEventListener('resize', layout);
+
 // The drive page opens a data connection just to read this phone's diagnostics log.
 function onDiagConnection(conn) {
   if (conn.metadata?.kind !== 'diag') return conn.close();
   const push = (line) => conn.open && conn.send({ type: 'diag', line });
+  const cleanup = () => {
+    diag.listeners.delete(push);
+    if (diagConns.get(conn.peer) === conn) diagConns.delete(conn.peer);
+  };
   conn.on('open', () => {
+    diagConns.get(conn.peer)?.close();
+    diagConns.set(conn.peer, conn);
     conn.send({ type: 'diag-all', lines: diag.lines });
+    // Their log link can open after we refused the call, so tell them now.
+    if (Date.now() - (turnedAway.get(conn.peer) || 0) < 30000 && !calls.has(conn.peer)) {
+      conn.send({ type: 'full', max: MAX_DRIVERS });
+    }
     diag.listeners.add(push);
   });
-  conn.on('close', () => diag.listeners.delete(push));
-  conn.on('error', () => diag.listeners.delete(push));
+  conn.on('close', cleanup);
+  conn.on('error', cleanup);
 }
 </script>
 </body>

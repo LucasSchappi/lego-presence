@@ -59,7 +59,10 @@
       <div class="card">
         <h1>🕹️ Drive · <span data-room></span></h1>
         <p id="start-text">Start to share your camera and mic with the phone and take control of the stand.</p>
-        <button id="start" class="primary">Start</button>
+        <div class="row" style="justify-content:center">
+          <input id="name" placeholder="Your name (optional)" maxlength="30" autocomplete="name" style="max-width:220px">
+          <button id="start" class="primary">Start</button>
+        </div>
       </div>
     </div>
   </div>
@@ -105,6 +108,10 @@ let conn = null, connStarted = 0;
 let diagConn = null, diagStarted = 0;
 let phoneLog = [];
 let hasRelay = false;
+let phoneFull = false;
+const nameInput = document.getElementById('name');
+try { nameInput.value = localStorage.getItem('presence.name') || ''; } catch {}
+const myName = () => nameInput.value.trim().slice(0, 30);
 let phoneFailures = 0; // call attempts in a row that never got video
 let phoneOffline = false;
 
@@ -123,6 +130,7 @@ document.getElementById('start').addEventListener('click', async () => {
   document.getElementById('cam').disabled = false;
   keepAwake();
 
+  try { localStorage.setItem('presence.name', myName()); } catch {}
   hasRelay = await iceReady;
   peer = makePeer(null, (t, s) => setChip('sig', t, s));
   setChip('sig', 'Connecting…', 'wait');
@@ -156,7 +164,7 @@ function tick() {
     call = null;
     stale.close();
     phoneOffline = false; // it answered the signalling server, so it is online
-    phoneFailures++;
+    if (!phoneFull) phoneFailures++; // when full, tick() keeps retrying in case a spot opens
   }
   if (!call) dialPhone();
 
@@ -168,7 +176,7 @@ function tick() {
 }
 
 function dialPhone() {
-  if (phoneOffline) {
+  if (phoneOffline || phoneFull) {
     // keep the "not online" message while we keep trying
   } else if (phoneFailures < 2) {
     setChip('phone', 'Phone: calling…', 'wait');
@@ -177,7 +185,7 @@ function dialPhone() {
       ? 'Phone: can\'t connect (see Diagnostics)'
       : 'Phone: blocked between networks — needs a relay (see README)', 'bad');
   }
-  const c = peer.call(ids.phone, localStream);
+  const c = peer.call(ids.phone, localStream, { metadata: { name: myName() } });
   call = c; callStarted = Date.now(); callLive = false;
   tuneVideo(c, 800_000);
   logConnection(c.peerConnection, 'call');
@@ -186,6 +194,7 @@ function dialPhone() {
     if (c !== call) return;
     callLive = true;
     phoneFailures = 0;
+    phoneFull = false;
     phoneOffline = false;
     $reconnecting.hidden = true;
     remoteVideo.srcObject = stream;
@@ -199,9 +208,10 @@ function dialPhone() {
     const wasLive = callLive;
     call = null; callLive = false;
     stopStats();
-    if (!wasLive && !phoneOffline) phoneFailures++;
+    if (!wasLive && !phoneOffline && !phoneFull) phoneFailures++;
     // Keep the last frame on screen and redial straight away rather than going black.
     $reconnecting.hidden = !wasLive;
+    if (phoneFull || phoneOffline) return; // tick() retries on its normal schedule
     if (phoneFailures < 2) setChip('phone', 'Phone: reconnecting…', 'bad');
     setTimeout(tick, 500);
   };
@@ -214,6 +224,11 @@ function dialPhoneDiag() {
   const c = peer.connect(ids.phone, { reliable: true, metadata: { kind: 'diag' } });
   diagConn = c; diagStarted = Date.now();
   c.on('data', (msg) => {
+    if (msg?.type === 'full') {
+      phoneFull = true;
+      setChip('phone', `Phone: full (${msg.max} drivers already)`, 'bad');
+      return;
+    }
     if (msg?.type === 'diag-all') phoneLog = msg.lines.slice();
     else if (msg?.type === 'diag') { phoneLog.push(msg.line); if (phoneLog.length > 600) phoneLog.shift(); }
   });
@@ -272,7 +287,7 @@ function stopStats() {
 
 function dialBase() {
   setChip('base', 'Computer: connecting…', 'wait');
-  const c = peer.connect(ids.base, { reliable: true });
+  const c = peer.connect(ids.base, { reliable: true, metadata: { name: myName() } });
   conn = c; connStarted = Date.now();
   c.on('open', () => {
     if (c !== conn) return;
@@ -282,7 +297,10 @@ function dialBase() {
   });
   c.on('data', (msg) => {
     if (msg?.type === 'status') {
-      setChip('stand', `Stand: ${msg.text}`, msg.ready ? 'ok' : 'bad');
+      let text = `Stand: ${msg.text}`;
+      if (msg.drivers > 1) text += ` · ${msg.drivers} drivers`;
+      if (msg.controller) text += ` · ${msg.controllerId === peer.id ? 'you are' : `${msg.controller} is`} steering`;
+      setChip('stand', text, msg.ready ? 'ok' : 'bad');
     }
   });
   const end = () => {
@@ -311,8 +329,8 @@ function press(dir) {
   release();
   held = dir;
   document.getElementById(dir).classList.add('active');
-  send({ type: 'move', dir });
-  holdTimer = setInterval(() => send({ type: 'move', dir }), HOLD_REPEAT);
+  send({ type: 'move', dir, press: true });
+  holdTimer = setInterval(() => send({ type: 'move', dir, press: false }), HOLD_REPEAT);
 }
 
 function release() {

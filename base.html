@@ -324,7 +324,7 @@ function move(dir) {
   if (dir !== 'left' && dir !== 'right') return;
   const out = outputs[modeSel.value];
   if (active !== dir) {
-    stopMotion();
+    haltOutput(); // not stopMotion(): that would also drop whoever just took control
     active = dir;
     $(`ind-${dir}`).classList.add('on');
     log(`▶ ${dir}`);
@@ -338,6 +338,11 @@ function move(dir) {
 
 function stopMotion() {
   clearTimeout(watchdog);
+  setController(null);
+  haltOutput();
+}
+
+function haltOutput() {
   if (!active) return;
   const dir = active;
   active = null;
@@ -353,12 +358,12 @@ let testTimer = null;
 function nudge(dir) {
   clearInterval(testTimer);
   const until = Date.now() + NUDGE_MS;
-  move(dir);
+  driverMove('local', dir, true);
   testTimer = setInterval(() => {
-    if (Date.now() < until) return move(dir);
+    if (Date.now() < until) return driverMove('local', dir, false);
     clearInterval(testTimer);
     testTimer = null;
-    stopMotion();
+    driverStop('local');
   }, 150);
 }
 document.querySelectorAll('.test').forEach((b) => {
@@ -373,12 +378,46 @@ addEventListener('keydown', (e) => {
 
 // ---- Peer connection from the remote driver -------------------------------
 
-let driver = null;
-let driverSeen = 0;
-const DRIVER_TIMEOUT_MS = 4000; // driver pings every second; closing a tab can take PeerJS ~30s to notice
+// Several people can drive at once. Whoever pressed an arrow most recently is in control;
+// the others' "still holding" refreshes are ignored until the controller lets go.
+const drivers = new Map(); // peer id → { conn, name, seen }
+let controller = null;     // peer id (or 'local') currently moving the stand
+const DRIVER_TIMEOUT_MS = 4000; // drivers ping every second; closing a tab can take PeerJS ~30s to notice
+
+function driverName(id) {
+  return id === 'local' ? 'this computer' : drivers.get(id)?.name || `driver ${id.slice(0, 4)}`;
+}
+
+function setController(id) {
+  if (controller === id) return;
+  controller = id;
+  broadcastStatus();
+}
 
 function broadcastStatus() {
-  if (driver?.open) driver.send({ type: 'status', ready: outputReady, text: outputText });
+  const msg = {
+    type: 'status',
+    ready: outputReady,
+    text: outputText,
+    drivers: drivers.size,
+    controller: controller ? driverName(controller) : null,
+    controllerId: controller,
+  };
+  drivers.forEach(({ conn }) => conn.open && conn.send(msg));
+  setChip('driver', drivers.size
+    ? `${drivers.size} driver${drivers.size > 1 ? 's' : ''}: ${[...drivers.keys()].map(driverName).join(', ')}`
+    : 'No driver', drivers.size ? 'ok' : 'bad');
+}
+
+function driverMove(id, dir, press) {
+  if (press || !controller || controller === id) {
+    setController(id);
+    move(dir);
+  }
+}
+
+function driverStop(id) {
+  if (controller === id) stopMotion();
 }
 
 if (room) {
@@ -393,37 +432,40 @@ if (room) {
   }));
 
   function onDriverConnection(c) {
+    const id = c.peer;
     c.on('open', () => {
-      // One driver at a time: the newest takes over.
-      if (driver && driver !== c) driver.close();
-      driver = c;
-      driverSeen = Date.now();
-      setChip('driver', 'Driver connected', 'ok');
-      log('Driver connected');
+      // The same driver reconnecting replaces its old link; anyone else is added.
+      const old = drivers.get(id);
+      if (old && old.conn !== c) old.conn.close();
+      drivers.set(id, { conn: c, name: String(c.metadata?.name || '').slice(0, 30), seen: Date.now() });
+      log(`${driverName(id)} connected`);
       broadcastStatus();
     });
     c.on('data', (msg) => {
-      if (c !== driver) return;
-      driverSeen = Date.now();
-      if (msg?.type === 'move') move(msg.dir);
-      else if (msg?.type === 'stop') stopMotion();
+      const d = drivers.get(id);
+      if (d?.conn !== c) return;
+      d.seen = Date.now();
+      if (msg?.type === 'move') driverMove(id, msg.dir, msg.press !== false);
+      else if (msg?.type === 'stop') driverStop(id);
     });
     const end = () => {
-      if (c !== driver) return;
-      driver = null;
-      stopMotion();
-      setChip('driver', 'No driver', 'bad');
-      log('Driver left');
+      if (drivers.get(id)?.conn !== c) return;
+      log(`${driverName(id)} left`);
+      driverStop(id);
+      drivers.delete(id);
+      broadcastStatus();
     };
     c.on('close', end);
     c.on('error', end);
   }
 
   setInterval(() => {
-    if (driver && Date.now() - driverSeen > DRIVER_TIMEOUT_MS) {
-      log('Driver stopped responding');
-      driver.close();
-    }
+    drivers.forEach((d, id) => {
+      if (Date.now() - d.seen > DRIVER_TIMEOUT_MS) {
+        log(`${driverName(id)} stopped responding`);
+        d.conn.close();
+      }
+    });
   }, 1000);
 
   refreshOutputStatus();

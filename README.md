@@ -75,6 +75,17 @@ Open **https://your-site/drive.html?room=YOURROOM** and click **Start**. To turn
 hold ◀ / ▶ (or the arrow keys). The status chips show whether the phone, the computer and
 the stand are ready.
 
+## Several drivers at once
+
+Up to **4** people can open `drive.html` in the same room at the same time:
+
+- The phone shows everyone in a split-screen grid, labelled with the names they typed. The phone's
+  upload is shared between them.
+- Everyone sees the phone's camera and can steer. **The most recent button press wins**: if someone
+  presses while another person is holding, they take over. When they let go, the first person's
+  hold carries on. Each driver's status shows who is steering.
+- A fifth driver sees "Phone: full" and joins automatically when a spot opens.
+
 ## Safety
 
 - If commands stop arriving for 0.5 s (dropped connection, closed tab), `base.html` stops the stand.

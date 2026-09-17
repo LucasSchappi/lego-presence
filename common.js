@@ -201,8 +201,9 @@ async function getCameraAndMic(contentHint) {
 // past what the Wi-Fi can carry and the video stalls.
 function tuneVideo(mediaConnection, maxBitrate) {
   const pc = mediaConnection.peerConnection;
-  if (!pc) return;
+  if (!pc) return () => {};
   const apply = async () => {
+    if (pc.connectionState !== 'connected') return;
     for (const sender of pc.getSenders()) {
       if (sender.track?.kind !== 'video') continue;
       const params = sender.getParameters();
@@ -216,8 +217,14 @@ function tuneVideo(mediaConnection, maxBitrate) {
       }
     }
   };
-  pc.addEventListener('connectionstatechange', () => pc.connectionState === 'connected' && apply());
-  if (pc.connectionState === 'connected') apply();
+  pc.addEventListener('connectionstatechange', apply);
+  apply();
+  // Returns a function to change the cap later (e.g. when more people join).
+  return (bitrate) => {
+    if (bitrate === maxBitrate) return;
+    maxBitrate = bitrate;
+    apply();
+  };
 }
 
 function selectedPair(report) {
