@@ -82,7 +82,7 @@ Before starting, each driver chooses a look (and can switch during the call from
 | Look | What the phone shows | Camera permission? |
 |---|---|---|
 | 📷 Camera | Their camera | Yes |
-| 🙂 Animated face | A Lego head that copies their expressions and head movement | Yes, but the camera is only used on their device for face tracking (MediaPipe) and never sent |
+| 🙂 Animated face | A Lego head that copies their expressions (independent eyebrows, smiles, frowns, pursed lips, puffed cheeks, winks) and head movement. It learns their resting face in the first second; **😐 Reset face** relearns it | Yes, but the camera is only used on their device for face tracking (MediaPipe) and never sent |
 | 🖼️ Picture | A picture they choose (remembered in that browser) | No |
 | 🔤 Name only | Their name and initials | No |
 

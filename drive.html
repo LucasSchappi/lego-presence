@@ -99,6 +99,7 @@
       <option value="name">🔤 Name only</option>
     </select>
     <button id="change-picture" hidden>🖼️ Change picture</button>
+    <button id="reset-face" hidden title="Relearn your neutral face">😐 Reset face</button>
     <button class="arrow" id="right" data-dir="right" disabled aria-label="Turn right">▶</button>
     <button id="diag-open">🩺 Diagnostics</button>
     <div class="hint">Hold a button (or the ← → keys) to turn the stand. <span id="notice"></span></div>
@@ -230,6 +231,8 @@ async function setLook(kind) {
   selfVideo.hidden = false;
   lookSwitch.value = kind;
   $('change-picture').hidden = kind !== 'picture';
+  $('reset-face').hidden = kind !== 'avatar';
+  if (kind === 'avatar') notice('Keep a relaxed face for a second so the head learns your neutral look.');
   old?.stop();
   store.set('look', kind);
   diag.log(`look: ${kind}`);
@@ -244,7 +247,7 @@ async function switchLook(kind) {
   if (kind === 'avatar') notice('Loading face tracking…');
   try {
     await setLook(kind);
-    notice('');
+    if (kind !== 'avatar') notice('');
   } catch (err) {
     lookSwitch.value = look.kind;
     notice(`Couldn't switch: ${err.message}`);
@@ -253,6 +256,10 @@ async function switchLook(kind) {
   }
 }
 lookSwitch.addEventListener('change', () => switchLook(lookSwitch.value));
+$('reset-face').addEventListener('click', () => {
+  look?.recalibrate?.();
+  notice('Relaxed face, please… learning your neutral look.');
+});
 
 document.getElementById('start').addEventListener('click', async () => {
   const kind = chosenLook();

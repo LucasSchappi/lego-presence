@@ -137,46 +137,111 @@ function loadFaceTracker() {
   return landmarkerPromise;
 }
 
-const NEUTRAL_FACE = {
-  blinkL: 0, blinkR: 0, lookX: 0, lookY: 0,
-  jaw: 0, smileL: 0, smileR: 0, frown: 0, pucker: 0,
-  browUp: 0, browDown: 0, yaw: 0, pitch: 0, roll: 0,
+// Face values used by the head. Everything is in image terms as the phone sees it:
+// "L"/"R" and x mean screen left/right, not the person's own left/right.
+const FACE_KEYS = [
+  'blinkL', 'blinkR', 'wideL', 'wideR', 'squintL', 'squintR', 'lookX', 'lookY',
+  'browInner', 'browOuterL', 'browOuterR', 'browDownL', 'browDownR',
+  'jaw', 'smileL', 'smileR', 'frownL', 'frownR', 'stretchL', 'stretchR',
+  'pucker', 'funnel', 'press', 'upperUp', 'lowerDown', 'mouthX', 'puff', 'sneer',
+  'yaw', 'pitch', 'roll',
+];
+const NEUTRAL_FACE = Object.fromEntries(FACE_KEYS.map((k) => [k, 0]));
+const SIGNED_KEYS = new Set(['lookX', 'lookY', 'mouthX', 'yaw', 'pitch', 'roll']);
+
+// How strongly each expression shows once measured from the person's resting face. Some of
+// MediaPipe's scores barely move (frowns, cheek puffs), so they get a bigger push.
+const FACE_GAIN = {
+  blinkL: 1.8, blinkR: 1.8, wideL: 2.2, wideR: 2.2, squintL: 1.2, squintR: 1.2,
+  browInner: 1.6, browOuterL: 1.8, browOuterR: 1.8, browDownL: 1.5, browDownR: 1.5,
+  jaw: 1.25, smileL: 1.15, smileR: 1.15, frownL: 3, frownR: 3, stretchL: 1.8, stretchR: 1.8,
+  pucker: 1.4, funnel: 1.6, press: 1.3, upperUp: 1.3, lowerDown: 1.4, mouthX: 3, puff: 2, sneer: 2.2,
 };
 
-// Turns MediaPipe results into the handful of values the head needs. Everything is in
-// image terms as the phone sees it: "L"/"R" and x are screen left/right, not the person's.
 function readFace(result, videoW, videoH) {
   const shapes = result.faceBlendshapes?.[0]?.categories;
   const lm = result.faceLandmarks?.[0];
   if (!shapes || !lm) return null;
   const s = {};
   for (const c of shapes) s[c.categoryName] = c.score;
+  const v = (k) => s[k] ?? 0;
+  // MediaPipe's "Left" is the person's left, which appears on the right of the image.
+  const screenL = (k) => v(`${k}Right`);
+  const screenR = (k) => v(`${k}Left`);
+  const avg = (k) => (v(`${k}Left`) + v(`${k}Right`)) / 2;
 
   // Head pose from landmarks: nose (1), face edges (234 screen-left, 454 screen-right),
   // forehead (10), chin (152), outer eye corners (33 screen-left, 263 screen-right).
   const px = (i) => ({ x: lm[i].x * videoW, y: lm[i].y * videoH });
   const nose = px(1), left = px(234), right = px(454), top = px(10), chin = px(152);
   const eyeL = px(33), eyeR = px(263);
-  const clamp = (v) => Math.max(-1, Math.min(1, v));
 
   return {
-    // The person's left eye is on the right of the image.
-    blinkL: s.eyeBlinkRight ?? 0,
-    blinkR: s.eyeBlinkLeft ?? 0,
-    lookX: clamp(((s.eyeLookOutLeft ?? 0) + (s.eyeLookInRight ?? 0) - (s.eyeLookInLeft ?? 0) - (s.eyeLookOutRight ?? 0)) / 2),
-    lookY: clamp(((s.eyeLookDownLeft ?? 0) + (s.eyeLookDownRight ?? 0) - (s.eyeLookUpLeft ?? 0) - (s.eyeLookUpRight ?? 0)) / 2),
-    jaw: s.jawOpen ?? 0,
-    smileL: s.mouthSmileRight ?? 0,
-    smileR: s.mouthSmileLeft ?? 0,
-    frown: ((s.mouthFrownLeft ?? 0) + (s.mouthFrownRight ?? 0)) / 2,
-    pucker: s.mouthPucker ?? 0,
-    browUp: Math.max(s.browInnerUp ?? 0, ((s.browOuterUpLeft ?? 0) + (s.browOuterUpRight ?? 0)) / 2),
-    // Relaxed brows often already score ~0.5 here, so only count clear frowns.
-    browDown: Math.max(0, ((s.browDownLeft ?? 0) + (s.browDownRight ?? 0)) / 2 - 0.45) / 0.55,
-    yaw: clamp(((nose.x - left.x) / Math.max(1, right.x - left.x) - 0.5) * 2.5),
-    pitch: clamp(((nose.y - top.y) / Math.max(1, chin.y - top.y) - 0.55) * 4),
+    blinkL: screenL('eyeBlink'), blinkR: screenR('eyeBlink'),
+    wideL: screenL('eyeWide'), wideR: screenR('eyeWide'),
+    squintL: screenL('eyeSquint'), squintR: screenR('eyeSquint'),
+    // Looking towards the person's left moves the eyes to screen right.
+    lookX: (v('eyeLookOutLeft') + v('eyeLookInRight') - v('eyeLookInLeft') - v('eyeLookOutRight')) / 2,
+    lookY: (avg('eyeLookDown') - avg('eyeLookUp')),
+    browInner: v('browInnerUp'),
+    browOuterL: screenL('browOuterUp'), browOuterR: screenR('browOuterUp'),
+    browDownL: screenL('browDown'), browDownR: screenR('browDown'),
+    jaw: v('jawOpen'),
+    smileL: screenL('mouthSmile'), smileR: screenR('mouthSmile'),
+    frownL: screenL('mouthFrown'), frownR: screenR('mouthFrown'),
+    stretchL: screenL('mouthStretch'), stretchR: screenR('mouthStretch'),
+    pucker: v('mouthPucker'),
+    funnel: v('mouthFunnel'),
+    press: avg('mouthPress'),
+    upperUp: avg('mouthUpperUp'),
+    lowerDown: avg('mouthLowerDown'),
+    mouthX: (v('mouthLeft') - v('mouthRight')) + (v('jawLeft') - v('jawRight')) * 0.6,
+    puff: v('cheekPuff'),
+    sneer: avg('noseSneer'),
+    yaw: ((nose.x - left.x) / Math.max(1, right.x - left.x) - 0.5) * 2.5,
+    pitch: ((nose.y - top.y) / Math.max(1, chin.y - top.y) - 0.55) * 4,
     roll: Math.atan2(eyeR.y - eyeL.y, eyeR.x - eyeL.x),
   };
+}
+
+// Everyone's relaxed face scores differently (plenty of people "smile" or "frown" at rest),
+// so expressions are measured from the person's own neutral face, learned over the first
+// second of tracking and whenever they press "Reset face".
+class FaceCalibration {
+  constructor() { this.reset(); }
+
+  reset() {
+    this.samples = [];
+    this.base = null;
+  }
+
+  get calibrating() { return !this.base; }
+
+  apply(raw) {
+    if (!this.base) {
+      this.samples.push(raw);
+      if (this.samples.length < 30) return { ...NEUTRAL_FACE, yaw: raw.yaw, pitch: raw.pitch, roll: raw.roll };
+      this.base = {};
+      for (const k of FACE_KEYS) {
+        const sorted = this.samples.map((f) => f[k]).sort((x, y) => x - y);
+        this.base[k] = sorted[Math.floor(sorted.length / 2)];
+      }
+      this.base.roll = 0; // a tilted head at startup is still a tilt
+    }
+    const out = {};
+    for (const k of FACE_KEYS) {
+      const value = raw[k], base = this.base[k];
+      if (SIGNED_KEYS.has(k)) {
+        out[k] = Math.max(-1.2, Math.min(1.2, (value - base) * (FACE_GAIN[k] ?? 1)));
+        continue;
+      }
+      // If they relax further than they did while calibrating, slowly learn that.
+      if (value < base) this.base[k] += (value - base) * 0.02;
+      const scaled = ((value - base) / Math.max(0.25, 1 - base)) * (FACE_GAIN[k] ?? 1);
+      out[k] = Math.max(0, Math.min(1, scaled));
+    }
+    return out;
+  }
 }
 
 async function avatarLook(name) {
@@ -199,6 +264,7 @@ async function avatarLook(name) {
   const ctx = canvas.getContext('2d');
   const track = canvas.captureStream(30).getVideoTracks()[0];
   const hue = nameHue(name);
+  const calibration = new FaceCalibration();
   const shown = { ...NEUTRAL_FACE };
   let target = { ...NEUTRAL_FACE };
   let lastSeen = 0, lastFrame = -1, running = true;
@@ -209,8 +275,8 @@ async function avatarLook(name) {
     if (video.readyState >= 2 && video.currentTime !== lastFrame) {
       lastFrame = video.currentTime;
       try {
-        const face = readFace(tracker.detectForVideo(video, now), video.videoWidth, video.videoHeight);
-        if (face) { target = face; lastSeen = now; }
+        const raw = readFace(tracker.detectForVideo(video, now), video.videoWidth, video.videoHeight);
+        if (raw) { target = calibration.apply(raw); lastSeen = now; }
       } catch (err) {
         console.warn('face tracking', err);
       }
@@ -220,12 +286,14 @@ async function avatarLook(name) {
       // Nobody in view: doze off and glance around.
       target = { ...NEUTRAL_FACE, blinkL: 0.65, blinkR: 0.65, lookX: Math.sin(now / 1500) * 0.6 };
     }
-    for (const k in shown) {
-      const speed = k.startsWith('blink') ? 0.7 : 0.45;
-      shown[k] += (target[k] - shown[k]) * speed;
+    // Small changes are smoothed (less jitter); big ones come through almost at once.
+    for (const k of FACE_KEYS) {
+      const d = target[k] - shown[k];
+      const base = k.startsWith('blink') ? 0.6 : 0.3;
+      shown[k] += d * Math.min(0.9, base + Math.abs(d) * 2);
     }
     drawLegoHead(ctx, shown, hue);
-    window.__avatar = { found: !lost, face: { ...shown } }; // for debugging and tests
+    window.__avatar = { found: !lost, calibrating: calibration.calibrating, face: { ...shown } }; // for debugging and tests
     setTimeout(frame, 33); // timers (unlike requestAnimationFrame) keep running in a background tab
   };
   frame();
@@ -234,6 +302,7 @@ async function avatarLook(name) {
     kind: 'avatar',
     track,
     mirror: true,
+    recalibrate: () => calibration.reset(),
     stop() {
       running = false;
       track.stop();
@@ -247,6 +316,8 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
   ctx.roundRect(x, y, w, h, r);
 }
+
+const clampTo = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 function drawLegoHead(ctx, f, hue) {
   const YELLOW = '#ffcd03', YELLOW_DARK = '#d9a800', INK = '#1b1b1b';
@@ -279,14 +350,14 @@ function drawLegoHead(ctx, f, hue) {
   roundRect(ctx, -48 + f.yaw * 10, -182, 96, 30, 10);
   ctx.fill();
 
-  // Head, shaded on the side turned away
-  const shade = ctx.createLinearGradient(-150, 0, 150, 0);
-  const light = 0.5 - f.yaw * 0.35;
+  // Head, shaded on the side turned away; puffed cheeks bulge it out.
+  const halfW = 150 + f.puff * 18;
+  const shade = ctx.createLinearGradient(-halfW, 0, halfW, 0);
   shade.addColorStop(0, YELLOW_DARK);
-  shade.addColorStop(Math.max(0.05, Math.min(0.95, light)), YELLOW);
+  shade.addColorStop(clampTo(0.5 - f.yaw * 0.35, 0.05, 0.95), YELLOW);
   shade.addColorStop(1, YELLOW_DARK);
   ctx.fillStyle = shade;
-  roundRect(ctx, -150, -150, 300, 290, 70);
+  roundRect(ctx, -halfW, -150, halfW * 2, 290, 70 + f.puff * 30);
   ctx.fill();
   ctx.lineWidth = 4;
   ctx.strokeStyle = 'rgba(0,0,0,.18)';
@@ -296,88 +367,170 @@ function drawLegoHead(ctx, f, hue) {
   ctx.translate(f.yaw * 45, f.pitch * 28);
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-
-  // Cheeks
   const smile = (f.smileL + f.smileR) / 2;
-  if (smile > 0.15) {
-    ctx.fillStyle = `rgba(255, 110, 110, ${Math.min(0.45, smile * 0.5)})`;
-    for (const x of [-98, 98]) {
+
+  // Puffed cheeks and blush
+  if (f.puff > 0.12) {
+    ctx.strokeStyle = `rgba(150, 110, 0, ${Math.min(0.6, f.puff)})`;
+    ctx.lineWidth = 5;
+    for (const side of [-1, 1]) {
       ctx.beginPath();
-      ctx.ellipse(x, 42, 28, 16, 0, 0, Math.PI * 2);
+      // The outward-facing half of a circle on each cheek.
+      const start = side < 0 ? Math.PI * 0.6 : -Math.PI * 0.4;
+      ctx.arc(side * (96 + f.puff * 10), 48, 26 + f.puff * 16, start, start + Math.PI * 0.8);
+      ctx.stroke();
+    }
+  }
+  if (smile > 0.35) {
+    ctx.fillStyle = `rgba(255, 110, 110, ${Math.min(0.45, (smile - 0.35) * 0.9)})`;
+    for (const x of [-100, 100]) {
+      ctx.beginPath();
+      ctx.ellipse(x, 44, 28, 16, 0, 0, Math.PI * 2);
       ctx.fill();
     }
   }
 
-  // Eyes and eyebrows
-  for (const [side, blink] of [[-1, f.blinkL], [1, f.blinkR]]) {
+  // Eyes
+  for (const side of [-1, 1]) {
+    const L = side < 0;
+    const blink = L ? f.blinkL : f.blinkR;
+    const wide = L ? f.wideL : f.wideR;
+    const squint = L ? f.squintL : f.squintR;
     const x = side * 55 + f.lookX * 9;
     const y = -22 + f.lookY * 7;
-    const open = Math.max(0.08, 1 - blink * 1.1);
+    const size = 1 + wide * 0.5;
+    const open = clampTo(1 - blink, 0, 1) * (1 - squint * 0.4);
     ctx.fillStyle = INK;
+    ctx.strokeStyle = INK;
+    if (open < 0.18) {
+      // Closed: a happy arc when smiling, otherwise a flat line.
+      ctx.lineWidth = 7;
+      ctx.beginPath();
+      if (smile > 0.4) ctx.arc(x, y + 8, 15, Math.PI * 1.15, Math.PI * 1.85);
+      else { ctx.moveTo(x - 16, y); ctx.lineTo(x + 16, y); }
+      ctx.stroke();
+      continue;
+    }
     ctx.beginPath();
-    ctx.ellipse(x, y, 17, 23 * open, 0, 0, Math.PI * 2);
+    ctx.ellipse(x, y, 17 * size, 23 * size * open, 0, 0, Math.PI * 2);
     ctx.fill();
     if (open > 0.35) {
       ctx.fillStyle = '#fff';
       ctx.beginPath();
-      ctx.arc(x - 5, y - 9 * open, 5, 0, Math.PI * 2);
+      ctx.arc(x - 5 * size, y - 9 * size * open, 5 * size, 0, Math.PI * 2);
       ctx.fill();
     }
+  }
 
-    const browY = -72 - f.browUp * 20 + f.browDown * 12;
-    const innerDrop = f.browDown * 12 - f.browUp * 6; // frowning pulls the inner ends down
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 8;
+  // Eyebrows: inner and outer ends move separately, so one raised brow, worried brows and
+  // angry V brows all work.
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 9;
+  for (const side of [-1, 1]) {
+    const L = side < 0;
+    const outerUp = L ? f.browOuterL : f.browOuterR;
+    const down = L ? f.browDownL : f.browDownR;
+    const lift = (L ? f.wideL : f.wideR) * 10;
+    const innerY = clampTo(-72 - f.browInner * 36 - outerUp * 8 + down * 28 - lift, -128, -50);
+    // Frowning drops the inner end and lifts the outer one: an angry V.
+    const outerY = clampTo(-70 - outerUp * 38 - f.browInner * 8 - down * 12 - lift, -128, -50);
     ctx.beginPath();
-    ctx.moveTo(side * 28, browY + innerDrop);
-    ctx.quadraticCurveTo(side * 55, browY - 12, side * 80, browY + 4);
+    ctx.moveTo(side * 24, innerY);
+    ctx.quadraticCurveTo(side * 54, (innerY + outerY) / 2 - 14 * (1 - down), side * 86, outerY);
     ctx.stroke();
   }
 
-  // Mouth
-  const y = 58;
-  const width = 96 * (1 - f.pucker * 0.55) + smile * 26;
-  const lx = -width / 2, rx = width / 2;
-  const ly = y - f.smileL * 24 + f.frown * 16;
-  const ry = y - f.smileR * 24 + f.frown * 16;
-  ctx.strokeStyle = INK;
+  // Nose scrunch
+  if (f.sneer > 0.3) {
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = `rgba(27, 27, 27, ${Math.min(0.8, f.sneer)})`;
+    for (const side of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(side * 10, 8);
+      ctx.lineTo(side * 20, 18);
+      ctx.moveTo(side * 12, 20);
+      ctx.lineTo(side * 22, 28);
+      ctx.stroke();
+    }
+  }
 
-  if (f.pucker > 0.55 && f.jaw < 0.2) {
+  drawMouth(ctx, f, smile);
+  ctx.restore();
+}
+
+function drawMouth(ctx, f, smile) {
+  const INK = '#1b1b1b';
+  const frown = (f.frownL + f.frownR) / 2;
+  const stretch = (f.stretchL + f.stretchR) / 2;
+  const narrow = Math.max(f.pucker, f.funnel);
+  const cx = clampTo(f.mouthX, -1, 1) * 36;
+  const y = 60;
+  const half = 48 * (1 - narrow * 0.6) + smile * 12 + stretch * 24;
+  const lx = cx - half - f.stretchL * 8;
+  const rx = cx + half + f.stretchR * 8;
+  // Corners go up with a smile and down with a frown, each side on its own (smirks).
+  const ly = y - f.smileL * 28 + f.frownL * 30;
+  const ry = y - f.smileR * 28 + f.frownR * 30;
+  const open = Math.max(f.jaw, f.funnel * 0.5, f.lowerDown * 0.6);
+  ctx.strokeStyle = INK;
+  ctx.fillStyle = '#4a0d12';
+
+  // Pursed lips: a kiss, or an "ooh" when open.
+  if (narrow > 0.45 && smile < 0.35 && stretch < 0.35) {
     ctx.lineWidth = 7;
     ctx.beginPath();
-    ctx.ellipse(0, y + 4, 13, 16, 0, 0, Math.PI * 2);
-    ctx.stroke();
-  } else if (f.jaw > 0.1) {
-    const bottom = y + 16 + f.jaw * 110;
-    const mouth = new Path2D();
-    mouth.moveTo(lx, ly);
-    mouth.quadraticCurveTo(0, y - 6 + smile * 12, rx, ry);
-    mouth.quadraticCurveTo(0, bottom, lx, ly);
-    mouth.closePath();
-    ctx.fillStyle = '#4a0d12';
-    ctx.fill(mouth);
-    ctx.save();
-    ctx.clip(mouth);
-    if (smile > 0.3) {
-      ctx.fillStyle = '#fff';
-      ctx.fillRect(lx, y - 30, width, 30 + 12);
+    if (open > 0.12 || f.funnel > 0.45) {
+      ctx.ellipse(cx, y + 4 + open * 10, 12 + (1 - narrow) * 10 + open * 6, 12 + open * 50 + f.funnel * 8, 0, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.ellipse(cx, y + 2, 10, 13, 0, 0, Math.PI * 2);
     }
-    ctx.fillStyle = '#e0626f';
-    ctx.beginPath();
-    ctx.ellipse(0, bottom - 8, width * 0.3, 18, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-    ctx.lineWidth = 6;
-    ctx.stroke(mouth);
-  } else {
+    ctx.stroke();
+    return;
+  }
+
+  if (open < 0.1) {
+    // Closed: bows down for a smile, up for a frown, flatter when lips are pressed.
+    const bow = (smile * 30 - frown * 26) * (1 - f.press * 0.6);
     ctx.lineWidth = 8;
     ctx.beginPath();
     ctx.moveTo(lx, ly);
-    ctx.quadraticCurveTo(0, y + smile * 34 - f.frown * 22, rx, ry);
+    ctx.quadraticCurveTo(cx, (ly + ry) / 2 + bow, rx, ry);
     ctx.stroke();
+    return;
   }
 
+  // Open. With a frown the corners sit low, which turns this into a sad open mouth.
+  const cornerY = (ly + ry) / 2;
+  // Sad: the top lip arches up and the bottom flattens, giving an upside-down open mouth.
+  const sad = clampTo(frown - smile, 0, 1);
+  const topCtl = cornerY - 6 + smile * 14 - sad * 60 - f.upperUp * 10;
+  const bottomCtl = cornerY + 14 + open * 105 * (1 - sad * 0.55);
+  // Midpoints of the two curves (a quadratic's midpoint sits halfway to its control point).
+  const topY = (cornerY + topCtl) / 2;
+  const bottomY = (cornerY + bottomCtl) / 2;
+  const mouth = new Path2D();
+  mouth.moveTo(lx, ly);
+  mouth.quadraticCurveTo(cx, topCtl, rx, ry);
+  mouth.quadraticCurveTo(cx, bottomCtl, lx, ly);
+  mouth.closePath();
+  ctx.fill(mouth);
+
+  ctx.save();
+  ctx.clip(mouth);
+  ctx.fillStyle = '#fff';
+  if (smile > 0.35 || stretch > 0.3 || f.upperUp > 0.45) ctx.fillRect(lx, topY - 60, rx - lx, 60 + 14);
+  if (stretch > 0.4) ctx.fillRect(lx, bottomY - 13, rx - lx, 60);
+  if (open > 0.3) {
+    ctx.fillStyle = '#e0626f';
+    ctx.beginPath();
+    ctx.ellipse(cx, bottomY - 4, (rx - lx) * 0.28, 16, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.restore();
+
+  ctx.lineWidth = 6;
+  ctx.stroke(mouth);
 }
 
 async function buildLook(kind, { name, picture }) {
