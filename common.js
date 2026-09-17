@@ -186,11 +186,11 @@ function onCallConnected(mediaConnection, fn) {
 // ---- Video quality ----------------------------------------------------------
 
 // 540p is plenty for a phone screen and leaves headroom when the picture is moving.
+const CAMERA_CONSTRAINTS = { facingMode: 'user', width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 30, max: 30 } };
+const MIC_CONSTRAINTS = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+
 async function getCameraAndMic(contentHint) {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: 'user', width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 30, max: 30 } },
-    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-  });
+  const stream = await navigator.mediaDevices.getUserMedia({ video: CAMERA_CONSTRAINTS, audio: MIC_CONSTRAINTS });
   // "motion" tells the encoder to keep frames flowing rather than keep every frame sharp.
   stream.getVideoTracks().forEach((t) => { if ('contentHint' in t) t.contentHint = contentHint; });
   return stream;

@@ -75,6 +75,19 @@ Open **https://your-site/drive.html?room=YOURROOM** and click **Start**. To turn
 hold ◀ / ▶ (or the arrow keys). The status chips show whether the phone, the computer and
 the stand are ready.
 
+## How drivers appear on the phone
+
+Before starting, each driver chooses a look (and can switch during the call from the menu under the video):
+
+| Look | What the phone shows | Camera permission? |
+|---|---|---|
+| 📷 Camera | Their camera | Yes |
+| 🙂 Animated face | A Lego head that copies their expressions and head movement | Yes, but the camera is only used on their device for face tracking (MediaPipe) and never sent |
+| 🖼️ Picture | A picture they choose (remembered in that browser) | No |
+| 🔤 Name only | Their name and initials | No |
+
+The microphone is optional too ("Use my microphone" on the start screen).
+
 ## Several drivers at once
 
 Up to **4** people can open `drive.html` in the same room at the same time:

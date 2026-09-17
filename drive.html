@@ -11,8 +11,20 @@
   #remote { width: 100%; height: 100%; object-fit: contain; }
   #self {
     position: absolute; right: 12px; bottom: 12px; width: 24vw; max-width: 200px;
-    border-radius: 10px; border: 2px solid rgba(255,255,255,.4); transform: scaleX(-1);
+    border-radius: 10px; border: 2px solid rgba(255,255,255,.4);
   }
+  #self.mirror { transform: scaleX(-1); }
+  .looks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0 8px; text-align: left; }
+  .looks label {
+    display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 10px;
+  }
+  .looks label:has(input:checked) { border-color: var(--accent); background: rgba(255, 207, 46, .08); }
+  .looks input { accent-color: var(--accent); }
+  #look-note { font-size: 0.85rem; min-height: 2.8em; margin-bottom: 8px; }
+  #picture-thumb { width: 72px; height: 72px; object-fit: cover; border-radius: 10px; border: 1px solid var(--line); }
+  .mic-row { justify-content: center; margin-bottom: 14px; color: var(--muted); font-size: 0.9rem; }
+  #notice { color: var(--wait); }
   .stage .chips { position: absolute; top: 12px; left: 12px; right: 12px; }
   #start-panel, #reconnecting { position: absolute; inset: 0; }
   #reconnecting { pointer-events: none; background: rgba(0,0,0,.35); }
@@ -58,11 +70,21 @@
     <div id="start-panel" class="center">
       <div class="card">
         <h1>🕹️ Drive · <span data-room></span></h1>
-        <p id="start-text">Start to share your camera and mic with the phone and take control of the stand.</p>
-        <div class="row" style="justify-content:center">
-          <input id="name" placeholder="Your name (optional)" maxlength="30" autocomplete="name" style="max-width:220px">
-          <button id="start" class="primary">Start</button>
+        <p id="start-text">Choose how you appear on the phone, then start.</p>
+        <input id="name" placeholder="Your name (optional)" maxlength="30" autocomplete="name" style="width:100%">
+        <div class="looks" role="radiogroup" aria-label="How you appear on the phone">
+          <label><input type="radio" name="look" value="camera" checked> 📷 Camera</label>
+          <label><input type="radio" name="look" value="avatar"> 🙂 Animated face</label>
+          <label><input type="radio" name="look" value="picture"> 🖼️ Picture</label>
+          <label><input type="radio" name="look" value="name"> 🔤 Name only</label>
         </div>
+        <p id="look-note"></p>
+        <div class="row" id="picture-row" style="justify-content:center;margin-bottom:12px" hidden>
+          <img id="picture-thumb" alt="Your picture" hidden>
+          <button id="choose-picture" type="button">Choose picture…</button>
+        </div>
+        <label class="row mic-row"><input type="checkbox" id="use-mic" checked> 🎤 Use my microphone</label>
+        <button id="start" class="primary">Start</button>
       </div>
     </div>
   </div>
@@ -70,10 +92,17 @@
   <div class="controls">
     <button class="arrow" id="left" data-dir="left" disabled aria-label="Turn left">◀</button>
     <button id="mic" aria-pressed="false" disabled>🎤 Mute</button>
-    <button id="cam" aria-pressed="false" disabled>📷 Hide</button>
+    <select id="look-switch" disabled aria-label="How you appear on the phone">
+      <option value="camera">📷 Camera</option>
+      <option value="avatar">🙂 Animated face</option>
+      <option value="picture">🖼️ Picture</option>
+      <option value="name">🔤 Name only</option>
+    </select>
+    <button id="change-picture" hidden>🖼️ Change picture</button>
     <button class="arrow" id="right" data-dir="right" disabled aria-label="Turn right">▶</button>
     <button id="diag-open">🩺 Diagnostics</button>
-    <div class="hint">Hold a button (or the ← → keys) to turn the stand.</div>
+    <div class="hint">Hold a button (or the ← → keys) to turn the stand. <span id="notice"></span></div>
+    <input type="file" id="picture-file" accept="image/*" hidden>
   </div>
 </div>
 
@@ -90,6 +119,7 @@
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="config.js"></script>
 <script src="common.js"></script>
+<script src="looks.js"></script>
 <script>
 const room = getRoomOrShowForm();
 const ids = room && peerIds(room);
@@ -102,7 +132,9 @@ const RETRY_EVERY = 3000;
 const HOLD_REPEAT = 150; // base stops the motor if it hears nothing for ~500ms
 
 let peer = null;
-let localStream = null;
+const outgoing = new MediaStream(); // what we send: the current look's video + the mic
+let look = null;
+let micTrack = null;
 let call = null, callStarted = 0, callLive = false;
 let conn = null, connStarted = 0;
 let diagConn = null, diagStarted = 0;
@@ -115,19 +147,151 @@ const myName = () => nameInput.value.trim().slice(0, 30);
 let phoneFailures = 0; // call attempts in a row that never got video
 let phoneOffline = false;
 
-document.getElementById('start').addEventListener('click', async () => {
+// ---- Looks (camera / animated face / picture / name) ---------------------------
+
+const $ = (id) => document.getElementById(id);
+const store = {
+  get(k) { try { return localStorage.getItem(`presence.${k}`); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(`presence.${k}`, v); } catch { /* full or blocked */ } },
+};
+const LOOK_NOTES = {
+  camera: 'The phone shows your camera.',
+  avatar: 'A Lego head copies your face. Your camera only tracks your face on this device — the phone never sees it.',
+  picture: 'The phone shows a picture you choose. Your camera stays off.',
+  name: 'The phone shows your name. Your camera stays off.',
+};
+const lookSwitch = $('look-switch');
+const pictureInput = $('picture-file');
+let picture = store.get('picture');
+let pickingFor = 'start'; // or 'switch' when changing picture during a call
+let noticeTimer = null;
+
+const chosenLook = () => document.querySelector('input[name=look]:checked').value;
+
+function notice(text) {
+  $('notice').textContent = text;
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => ($('notice').textContent = ''), 10000);
+}
+
+function updateLookNote() {
+  const kind = chosenLook();
+  $('look-note').textContent = LOOK_NOTES[kind];
+  $('picture-row').hidden = kind !== 'picture';
+  $('picture-thumb').hidden = !picture;
+  if (picture) $('picture-thumb').src = picture;
+  $('choose-picture').textContent = picture ? 'Change…' : 'Choose picture…';
+}
+
+const savedLook = store.get('look');
+if (savedLook && (savedLook !== 'picture' || picture)) {
+  const radio = document.querySelector(`input[name=look][value="${savedLook}"]`);
+  if (radio) radio.checked = true;
+}
+updateLookNote();
+document.querySelectorAll('input[name=look]').forEach((r) => r.addEventListener('change', () => {
+  updateLookNote();
+  if (chosenLook() === 'picture' && !picture) choosePicture('start');
+}));
+$('choose-picture').addEventListener('click', () => choosePicture('start'));
+$('change-picture').addEventListener('click', () => choosePicture('switch'));
+
+function choosePicture(purpose) {
+  pickingFor = purpose;
+  pictureInput.value = '';
+  pictureInput.click();
+}
+
+pictureInput.addEventListener('change', async () => {
+  const file = pictureInput.files[0];
+  if (!file) return;
   try {
-    localStream = await getCameraAndMic('');
+    picture = await pictureFromFile(file);
   } catch (err) {
-    document.getElementById('start-text').textContent =
-      `Camera/mic blocked: ${err.message}. Allow access and reload.`;
-    return;
+    return notice(`Couldn't read that picture (${err.message}).`);
   }
-  selfVideo.srcObject = localStream;
+  store.set('picture', picture);
+  updateLookNote();
+  if (pickingFor === 'switch') switchLook('picture');
+});
+
+// Swaps what we send, including on a call that's already running.
+async function setLook(kind) {
+  const next = await buildLook(kind, { name: myName(), picture });
+  const old = look;
+  look = next;
+  outgoing.getVideoTracks().forEach((t) => outgoing.removeTrack(t));
+  outgoing.addTrack(next.track);
+  const sender = call?.peerConnection?.getTransceivers()
+    .find((t) => t.receiver.track?.kind === 'video')?.sender;
+  if (sender) await sender.replaceTrack(next.track);
+  selfVideo.srcObject = new MediaStream([next.track]);
+  selfVideo.classList.toggle('mirror', next.mirror);
   selfVideo.hidden = false;
-  document.getElementById('start-panel').hidden = true;
-  document.getElementById('mic').disabled = false;
-  document.getElementById('cam').disabled = false;
+  lookSwitch.value = kind;
+  $('change-picture').hidden = kind !== 'picture';
+  old?.stop();
+  store.set('look', kind);
+  diag.log(`look: ${kind}`);
+}
+
+async function switchLook(kind) {
+  if (kind === 'picture' && !picture) {
+    lookSwitch.value = look.kind;
+    return choosePicture('switch');
+  }
+  lookSwitch.disabled = true;
+  if (kind === 'avatar') notice('Loading face tracking…');
+  try {
+    await setLook(kind);
+    notice('');
+  } catch (err) {
+    lookSwitch.value = look.kind;
+    notice(`Couldn't switch: ${err.message}`);
+  } finally {
+    lookSwitch.disabled = false;
+  }
+}
+lookSwitch.addEventListener('change', () => switchLook(lookSwitch.value));
+
+document.getElementById('start').addEventListener('click', async () => {
+  const kind = chosenLook();
+  if (kind === 'picture' && !picture) return choosePicture('start');
+  const startBtn = $('start');
+  startBtn.disabled = true;
+  $('start-text').textContent = kind === 'avatar' ? 'Loading face tracking…' : 'Starting…';
+  const needsCamera = kind === 'camera' || kind === 'avatar';
+  const problems = [];
+
+  if ($('use-mic').checked) {
+    try {
+      // Asking for the camera at the same time gives one permission prompt instead of two.
+      const s = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS, video: needsCamera });
+      s.getVideoTracks().forEach((t) => t.stop());
+      micTrack = s.getAudioTracks()[0];
+    } catch {
+      try {
+        micTrack = (await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS })).getAudioTracks()[0];
+      } catch (err) {
+        problems.push(`microphone blocked (${err.message}), joining without sound`);
+      }
+    }
+    if (micTrack) outgoing.addTrack(micTrack);
+  }
+
+  try {
+    await setLook(kind);
+  } catch (err) {
+    problems.push(`${kind === 'avatar' ? 'animated face' : kind} unavailable (${err.message}), showing your name instead`);
+    await setLook('name');
+  }
+  if (problems.length) notice(`Note: ${problems.join('; ')}.`);
+
+  $('start-panel').hidden = true;
+  lookSwitch.disabled = false;
+  const mic = $('mic');
+  mic.disabled = !micTrack;
+  if (!micTrack) mic.textContent = '🎤 Off';
   keepAwake();
 
   try { localStorage.setItem('presence.name', myName()); } catch {}
@@ -185,7 +349,7 @@ function dialPhone() {
       ? 'Phone: can\'t connect (see Diagnostics)'
       : 'Phone: blocked between networks — needs a relay (see README)', 'bad');
   }
-  const c = peer.call(ids.phone, localStream, { metadata: { name: myName() } });
+  const c = peer.call(ids.phone, outgoing, { metadata: { name: myName() } });
   call = c; callStarted = Date.now(); callLive = false;
   tuneVideo(c, 800_000);
   logConnection(c.peerConnection, 'call');
@@ -366,18 +530,12 @@ document.addEventListener('visibilitychange', () => document.hidden && release()
 
 // ---- Mute / hide camera ---------------------------------------------------
 
-function toggleTrack(buttonId, kind, onLabel, offLabel) {
-  const btn = document.getElementById(buttonId);
-  btn.addEventListener('click', () => {
-    const tracks = kind === 'audio' ? localStream.getAudioTracks() : localStream.getVideoTracks();
-    const off = btn.getAttribute('aria-pressed') !== 'true';
-    tracks.forEach((t) => (t.enabled = !off));
-    btn.setAttribute('aria-pressed', String(off));
-    btn.textContent = off ? offLabel : onLabel;
-  });
-}
-toggleTrack('mic', 'audio', '🎤 Mute', '🎤 Unmute');
-toggleTrack('cam', 'video', '📷 Hide', '📷 Show');
+$('mic').addEventListener('click', () => {
+  if (!micTrack) return;
+  micTrack.enabled = !micTrack.enabled;
+  $('mic').setAttribute('aria-pressed', String(!micTrack.enabled));
+  $('mic').textContent = micTrack.enabled ? '🎤 Mute' : '🎤 Unmute';
+});
 </script>
 </body>
 </html>
