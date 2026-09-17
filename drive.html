@@ -28,6 +28,9 @@
   }
   .arrow.active { background: var(--accent); color: #111; border-color: var(--accent); }
   .arrow:disabled { opacity: 0.4; cursor: not-allowed; }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 14px; width: min(900px, calc(100vw - 32px)); }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  #diag-text { width: 100%; height: 55vh; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; font: 11px/1.4 ui-monospace, Menlo, monospace; }
   .hint { color: var(--muted); font-size: 0.85rem; width: 100%; text-align: center; }
 </style>
 </head>
@@ -66,9 +69,20 @@
     <button id="mic" aria-pressed="false" disabled>🎤 Mute</button>
     <button id="cam" aria-pressed="false" disabled>📷 Hide</button>
     <button class="arrow" id="right" data-dir="right" disabled aria-label="Turn right">▶</button>
+    <button id="diag-open">🩺 Diagnostics</button>
     <div class="hint">Hold a button (or the ← → keys) to turn the stand.</div>
   </div>
 </div>
+
+<dialog id="diag-dialog">
+  <p style="margin-top:0">If the video drops, open this <strong>right after</strong> it happens, copy, and send it over.
+  It includes this computer's log and the phone's log.</p>
+  <textarea id="diag-text" readonly></textarea>
+  <div class="row" style="justify-content:flex-end;margin-top:8px">
+    <button id="diag-copy" class="primary">Copy</button>
+    <button id="diag-close">Close</button>
+  </div>
+</dialog>
 
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="common.js"></script>
@@ -87,6 +101,8 @@ let peer = null;
 let localStream = null;
 let call = null, callStarted = 0, callLive = false;
 let conn = null, connStarted = 0;
+let diagConn = null, diagStarted = 0;
+let phoneLog = [];
 
 document.getElementById('start').addEventListener('click', async () => {
   try {
@@ -126,6 +142,9 @@ function tick() {
 
   if (conn && !conn.open && now - connStarted > PENDING_TIMEOUT) { conn.close(); conn = null; }
   if (!conn) dialBase();
+
+  if (diagConn && !diagConn.open && now - diagStarted > PENDING_TIMEOUT) { diagConn.close(); diagConn = null; }
+  if (!diagConn) dialPhoneDiag();
 }
 
 function dialPhone() {
@@ -133,6 +152,8 @@ function dialPhone() {
   const c = peer.call(ids.phone, localStream);
   call = c; callStarted = Date.now(); callLive = false;
   tuneVideo(c, 800_000);
+  logConnection(c.peerConnection, 'call');
+  diag.log('calling phone');
   c.on('stream', (stream) => {
     if (c !== call) return;
     callLive = true;
@@ -142,8 +163,9 @@ function dialPhone() {
     remoteVideo.play().catch(() => {});
     setChip('phone', 'Phone: live', 'ok');
   });
-  const end = () => {
+  const end = (why) => {
     if (c !== call) return;
+    diag.log(`call ended (${why})`);
     const wasLive = callLive;
     call = null; callLive = false;
     stopStats();
@@ -152,10 +174,49 @@ function dialPhone() {
     setChip('phone', 'Phone: reconnecting…', 'bad');
     setTimeout(tick, 500);
   };
+  c.on('close', () => end('closed'));
+  c.on('error', (err) => end(`error ${err.type}`));
+  watchIce(c, () => { end('connection lost'); c.close(); });
+}
+
+function dialPhoneDiag() {
+  const c = peer.connect(ids.phone, { reliable: true, metadata: { kind: 'diag' } });
+  diagConn = c; diagStarted = Date.now();
+  c.on('data', (msg) => {
+    if (msg?.type === 'diag-all') phoneLog = msg.lines.slice();
+    else if (msg?.type === 'diag') { phoneLog.push(msg.line); if (phoneLog.length > 600) phoneLog.shift(); }
+  });
+  const end = () => { if (c === diagConn) diagConn = null; };
   c.on('close', end);
   c.on('error', end);
-  watchIce(c, () => { end(); c.close(); });
 }
+
+function diagnosticsText() {
+  return [
+    `# Lego Presence diagnostics · ${new Date().toString()}`,
+    `# room ${room} · call ${callLive ? 'live' : 'down'} · computer ${conn?.open ? 'connected' : 'down'}`,
+    '', '## This device (drive page)', ...diag.lines,
+    '', `## Phone${diagConn?.open ? '' : ' (log link currently down: showing what arrived before)'}`, ...phoneLog,
+  ].join('\n');
+}
+
+const diagDialog = document.getElementById('diag-dialog');
+document.getElementById('diag-open').addEventListener('click', () => {
+  document.getElementById('diag-text').value = diagnosticsText();
+  diagDialog.showModal();
+});
+document.getElementById('diag-close').addEventListener('click', () => diagDialog.close());
+document.getElementById('diag-copy').addEventListener('click', async (e) => {
+  const text = document.getElementById('diag-text');
+  try {
+    await navigator.clipboard.writeText(text.value);
+  } catch {
+    text.select();
+    document.execCommand('copy');
+  }
+  e.target.textContent = 'Copied ✓';
+  setTimeout(() => (e.target.textContent = 'Copy'), 1500);
+});
 
 // ---- Connection stats -------------------------------------------------------
 

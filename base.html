@@ -381,20 +381,17 @@ function broadcastStatus() {
 }
 
 if (room) {
-  const peer = makePeer(peerIds(room).base, (t, s) => setChip('sig', t, s));
-  setChip('sig', 'Connecting…', 'wait');
-  peer.on('open', () => { setChip('sig', 'Online', 'ok'); log('Waiting for a driver'); });
-  peer.on('error', (err) => {
-    if (err.type === 'unavailable-id') {
-      setChip('sig', 'Room busy', 'bad');
-      log('Another base page is already open for this room. Close it and reload.');
-      peer.destroy();
-    } else {
-      log(`Peer error: ${err.type}`);
-    }
+  makeFixedPeer(peerIds(room).base, (t, s) => setChip('sig', t, s), (peer) => {
+    setChip('sig', 'Connecting…', 'wait');
+    peer.on('open', () => { setChip('sig', 'Online', 'ok'); log('Waiting for a driver'); });
+    peer.on('error', (err) => {
+      if (err.type === 'unavailable-id') log('Room ID still taken (another base page open, or an old session). Retrying…');
+      else if (err.type !== 'peer-unavailable') log(`Peer error: ${err.type}`);
+    });
+    peer.on('connection', onDriverConnection);
   });
 
-  peer.on('connection', (c) => {
+  function onDriverConnection(c) {
     c.on('open', () => {
       // One driver at a time: the newest takes over.
       if (driver && driver !== c) driver.close();
@@ -419,7 +416,7 @@ if (room) {
     };
     c.on('close', end);
     c.on('error', end);
-  });
+  }
 
   setInterval(() => {
     if (driver && Date.now() - driverSeen > DRIVER_TIMEOUT_MS) {

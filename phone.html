@@ -76,49 +76,57 @@ document.getElementById('start').addEventListener('click', async () => {
 });
 
 function connect() {
-  const peer = makePeer(peerIds(room).phone, (t, s) => setChip('sig', t, s));
-  setChip('sig', 'Connecting…', 'wait');
+  makeFixedPeer(peerIds(room).phone, (t, st) => setChip('sig', t, st), (peer) => {
+    setChip('sig', 'Connecting…', 'wait');
+    peer.on('open', () => setChip('sig', 'Online', 'ok'));
+    peer.on('call', onCall);
+    peer.on('connection', onDiagConnection);
+  });
+}
 
-  peer.on('open', () => setChip('sig', 'Online', 'ok'));
+function onCall(call) {
+  // Only one caller at a time: the newest wins.
+  diag.log('incoming call');
+  const previous = currentCall;
+  currentCall = call;
+  previous?.close();
+  setChip('call', 'Incoming…', 'wait');
+  call.answer(localStream);
+  tuneVideo(call, 1_000_000);
+  logConnection(call.peerConnection, 'call');
 
-  peer.on('error', (err) => {
-    if (err.type === 'unavailable-id') {
-      setChip('sig', 'Room busy', 'bad');
-      showIdle('Another phone is already using this room. Close it or pick another room.');
-      peer.destroy();
-    } else {
-      console.warn(err);
-    }
+  call.on('stream', (stream) => {
+    if (call !== currentCall) return;
+    remoteVideo.srcObject = stream;
+    remoteVideo.play().catch(() => {});
+    idle.hidden = true;
+    setChip('call', 'In call', 'ok');
   });
 
-  peer.on('call', (call) => {
-    // Only one caller at a time: the newest wins.
-    if (currentCall) currentCall.close();
-    currentCall = call;
-    setChip('call', 'Incoming…', 'wait');
-    call.answer(localStream);
-    tuneVideo(call, 1_000_000);
+  const end = (why) => {
+    if (call !== currentCall) return;
+    diag.log(`call ended (${why})`);
+    currentCall = null;
+    remoteVideo.srcObject = null;
+    setChip('call', 'No call', 'bad');
+    showIdle('Call ended. Waiting for the remote person to call…');
+  };
+  call.on('close', () => end('closed'));
+  call.on('error', (err) => end(`error ${err.type}`));
+  // PeerJS doesn't always fire 'close' when the other side vanishes; watch ICE too.
+  watchIce(call, () => { end('connection lost'); call.close(); });
+}
 
-    call.on('stream', (stream) => {
-      if (call !== currentCall) return;
-      remoteVideo.srcObject = stream;
-      remoteVideo.play().catch(() => {});
-      idle.hidden = true;
-      setChip('call', 'In call', 'ok');
-    });
-
-    const end = () => {
-      if (call !== currentCall) return;
-      currentCall = null;
-      remoteVideo.srcObject = null;
-      setChip('call', 'No call', 'bad');
-      showIdle('Call ended. Waiting for the remote person to call…');
-    };
-    call.on('close', end);
-    call.on('error', end);
-    // PeerJS doesn't always fire 'close' when the other side vanishes; watch ICE too.
-    watchIce(call, () => { end(); call.close(); });
+// The drive page opens a data connection just to read this phone's diagnostics log.
+function onDiagConnection(conn) {
+  if (conn.metadata?.kind !== 'diag') return conn.close();
+  const push = (line) => conn.open && conn.send({ type: 'diag', line });
+  conn.on('open', () => {
+    conn.send({ type: 'diag-all', lines: diag.lines });
+    diag.listeners.add(push);
   });
+  conn.on('close', () => diag.listeners.delete(push));
+  conn.on('error', () => diag.listeners.delete(push));
 }
 </script>
 </body>

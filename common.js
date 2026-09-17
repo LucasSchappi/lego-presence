@@ -23,6 +23,33 @@ function peerIds(room) {
   };
 }
 
+// ---- Diagnostics -------------------------------------------------------------
+// A rolling log of everything that could explain a dropped call. The phone streams its
+// log to the drive page, where "Diagnostics" shows both.
+
+const diag = {
+  lines: [],
+  listeners: new Set(),
+  log(msg) {
+    const line = `${new Date().toISOString().slice(11, 23)} ${msg}`;
+    this.lines.push(line);
+    if (this.lines.length > 600) this.lines.shift();
+    console.log('[diag]', msg);
+    this.listeners.forEach((fn) => fn(line));
+  },
+};
+
+diag.log(`open ${location.pathname.split('/').pop() || 'index'} · ${navigator.userAgent}`);
+document.addEventListener('visibilitychange', () => diag.log(`page ${document.visibilityState}`));
+addEventListener('pagehide', () => diag.log('page hide/unload'));
+addEventListener('online', () => diag.log('browser online'));
+addEventListener('offline', () => diag.log('browser OFFLINE'));
+screen.orientation?.addEventListener('change', () => diag.log(`orientation ${screen.orientation.type}`));
+navigator.connection?.addEventListener?.('change', () => {
+  const c = navigator.connection;
+  diag.log(`network changed ${c.type || ''} ${c.effectiveType || ''} ${c.downlink ?? ''}Mbps`);
+});
+
 // Returns the room from ?room=..., or shows the room form and returns null.
 function getRoomOrShowForm() {
   const room = cleanRoom(new URLSearchParams(location.search).get('room'));
@@ -53,17 +80,41 @@ function setChip(id, text, state) {
 
 function makePeer(id, onStatus) {
   const peer = id ? new Peer(id, PEER_OPTIONS) : new Peer(PEER_OPTIONS);
+  peer.on('open', (got) => diag.log(`signalling open as ${got.replace(PEER_PREFIX, '')}`));
+  peer.on('error', (err) => diag.log(`signalling error ${err.type}: ${err.message}`));
   peer.on('disconnected', () => {
+    if (peer.destroyed) return;
+    diag.log('signalling disconnected, reconnecting');
     onStatus?.('Reconnecting to signalling…', 'wait');
     setTimeout(() => !peer.destroyed && peer.reconnect(), 2000);
   });
   return peer;
 }
 
+// For the phone and base, whose IDs are fixed. After a reload the old registration lingers
+// on the signalling server for up to a minute ("ID taken"), so keep retrying instead of giving up.
+function makeFixedPeer(id, onStatus, setup) {
+  const peer = makePeer(id, onStatus);
+  peer.on('error', (err) => {
+    if (err.type !== 'unavailable-id') return;
+    peer.destroy();
+    onStatus?.('Waiting for old session to clear…', 'wait');
+    setTimeout(() => makeFixedPeer(id, onStatus, setup), 5000);
+  });
+  setup(peer);
+  return peer;
+}
+
 async function keepAwake() {
-  if (!('wakeLock' in navigator)) return;
+  if (!('wakeLock' in navigator)) return diag.log('no wake lock support: the screen may sleep');
   const request = async () => {
-    try { await navigator.wakeLock.request('screen'); } catch { /* not allowed right now */ }
+    try {
+      const lock = await navigator.wakeLock.request('screen');
+      diag.log('screen wake lock on');
+      lock.addEventListener('release', () => diag.log('screen wake lock released'));
+    } catch (err) {
+      diag.log(`screen wake lock refused: ${err.message}`);
+    }
   };
   await request();
   document.addEventListener('visibilitychange', () => {
@@ -82,7 +133,9 @@ function watchIce(mediaConnection, onGone, graceMs = 15000) {
     const s = pc.iceConnectionState;
     clearTimeout(timer);
     if (s === 'failed' || s === 'closed') onGone();
-    else if (s === 'disconnected') timer = setTimeout(onGone, graceMs);
+    else if (s === 'disconnected') {
+      timer = setTimeout(() => { diag.log(`gave up after ${graceMs / 1000}s disconnected`); onGone(); }, graceMs);
+    }
   });
   // Chrome reports a dead connection as "failed" here well before the grace period runs out.
   pc.addEventListener('connectionstatechange', () => {
@@ -127,19 +180,72 @@ function tuneVideo(mediaConnection, maxBitrate) {
   if (pc.connectionState === 'connected') apply();
 }
 
+function selectedPair(report) {
+  let id = null, fallback = null;
+  report.forEach((r) => {
+    if (r.type === 'transport' && r.selectedCandidatePairId) id = r.selectedCandidatePairId;
+    if (r.type === 'candidate-pair' && r.selected) fallback = r;
+  });
+  return (id && report.get(id)) || fallback;
+}
+
+function describeRoute(report, pair) {
+  if (!pair) return '?';
+  const side = (c) => (c ? `${c.candidateType}/${c.protocol}${c.networkType ? '/' + c.networkType : ''}` : '?');
+  return `${side(report.get(pair.localCandidateId))} ↔ ${side(report.get(pair.remoteCandidateId))}`;
+}
+
+// Logs every state change on a WebRTC connection, and a stats line every few seconds.
+function logConnection(pc, label, everyMs = 5000) {
+  pc.addEventListener('iceconnectionstatechange', () => diag.log(`${label} ice ${pc.iceConnectionState}`));
+  pc.addEventListener('connectionstatechange', async () => {
+    diag.log(`${label} connection ${pc.connectionState}`);
+    if (pc.connectionState === 'connected') {
+      const report = await pc.getStats();
+      diag.log(`${label} route ${describeRoute(report, selectedPair(report))}`);
+    }
+  });
+
+  let last = {};
+  const timer = setInterval(async () => {
+    if (pc.connectionState === 'closed') return clearInterval(timer);
+    const report = await pc.getStats().catch(() => null);
+    if (!report) return;
+    const parts = [];
+    const pair = selectedPair(report);
+    if (pair?.currentRoundTripTime != null) parts.push(`rtt ${Math.round(pair.currentRoundTripTime * 1000)}ms`);
+    if (pair?.availableOutgoingBitrate) parts.push(`uplink est ${Math.round(pair.availableOutgoingBitrate / 1000)}kbps`);
+    report.forEach((r) => {
+      if (r.kind !== 'video') return;
+      const prev = last[r.id];
+      const secs = prev ? (r.timestamp - prev.timestamp) / 1000 || 1 : 0;
+      if (r.type === 'outbound-rtp') {
+        const kbps = prev ? Math.round(((r.bytesSent - prev.bytesSent) * 8) / 1000 / secs) : 0;
+        parts.push(`send ${r.frameHeight || 0}p ${Math.round(r.framesPerSecond || 0)}fps ${kbps}kbps limit=${r.qualityLimitationReason ?? '?'}`);
+      } else if (r.type === 'inbound-rtp') {
+        const kbps = prev ? Math.round(((r.bytesReceived - prev.bytesReceived) * 8) / 1000 / secs) : 0;
+        const lost = prev ? r.packetsLost - prev.packetsLost : 0;
+        const freezes = r.freezeCount != null ? ` freezes=${r.freezeCount}` : '';
+        parts.push(`recv ${r.frameHeight || 0}p ${Math.round(r.framesPerSecond || 0)}fps ${kbps}kbps lost+${lost}${freezes}`);
+      } else if (r.type === 'remote-inbound-rtp') {
+        parts.push(`far-end loss ${Math.round((r.fractionLost || 0) * 100)}%`);
+      }
+      last[r.id] = r;
+    });
+    if (parts.length) diag.log(`${label} ${parts.join(' | ')}`);
+  }, everyMs);
+}
+
 // Summarises the incoming video on a connection, e.g. "540p · 30 fps · 900 kbps · 0% loss · 40 ms · direct".
 function makeStatsReader(pc) {
   let last = null;
   return async () => {
     const report = await pc.getStats();
-    let video = null, pair = null, selectedId = null;
+    let video = null;
     report.forEach((r) => {
       if (r.type === 'inbound-rtp' && r.kind === 'video') video = r;
-      if (r.type === 'transport' && r.selectedCandidatePairId) selectedId = r.selectedCandidatePairId;
     });
-    report.forEach((r) => {
-      if (r.type === 'candidate-pair' && (r.id === selectedId || (!selectedId && r.selected))) pair = r;
-    });
+    const pair = selectedPair(report);
     if (!video) return null;
 
     const now = { t: video.timestamp, bytes: video.bytesReceived, got: video.packetsReceived, lost: video.packetsLost };
