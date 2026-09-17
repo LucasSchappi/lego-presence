@@ -112,6 +112,7 @@
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="config.js"></script>
 <script src="common.js"></script>
 <script>
 const room = getRoomOrShowForm();
@@ -381,7 +382,7 @@ function broadcastStatus() {
 }
 
 if (room) {
-  makeFixedPeer(peerIds(room).base, (t, s) => setChip('sig', t, s), (peer) => {
+  iceReady.then(() => makeFixedPeer(peerIds(room).base, (t, s) => setChip('sig', t, s), (peer) => {
     setChip('sig', 'Connecting…', 'wait');
     peer.on('open', () => { setChip('sig', 'Online', 'ok'); log('Waiting for a driver'); });
     peer.on('error', (err) => {
@@ -389,7 +390,7 @@ if (room) {
       else if (err.type !== 'peer-unavailable') log(`Peer error: ${err.type}`);
     });
     peer.on('connection', onDriverConnection);
-  });
+  }));
 
   function onDriverConnection(c) {
     c.on('open', () => {

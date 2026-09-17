@@ -85,6 +85,7 @@
 </dialog>
 
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="config.js"></script>
 <script src="common.js"></script>
 <script>
 const room = getRoomOrShowForm();
@@ -93,7 +94,7 @@ const remoteVideo = document.getElementById('remote');
 const selfVideo = document.getElementById('self');
 const arrows = [...document.querySelectorAll('.arrow')];
 
-const PENDING_TIMEOUT = 10000;
+const PENDING_TIMEOUT = 15000; // relayed connections can take several seconds to come up
 const RETRY_EVERY = 3000;
 const HOLD_REPEAT = 150; // base stops the motor if it hears nothing for ~500ms
 
@@ -103,6 +104,9 @@ let call = null, callStarted = 0, callLive = false;
 let conn = null, connStarted = 0;
 let diagConn = null, diagStarted = 0;
 let phoneLog = [];
+let hasRelay = false;
+let phoneFailures = 0; // call attempts in a row that never got video
+let phoneOffline = false;
 
 document.getElementById('start').addEventListener('click', async () => {
   try {
@@ -119,6 +123,7 @@ document.getElementById('start').addEventListener('click', async () => {
   document.getElementById('cam').disabled = false;
   keepAwake();
 
+  hasRelay = await iceReady;
   peer = makePeer(null, (t, s) => setChip('sig', t, s));
   setChip('sig', 'Connecting…', 'wait');
   peer.on('open', () => {
@@ -128,7 +133,15 @@ document.getElementById('start').addEventListener('click', async () => {
   });
   peer.on('error', (err) => {
     // "peer-unavailable" just means that device isn't online yet; tick() retries.
-    if (err.type !== 'peer-unavailable') console.warn(err);
+    if (err.type !== 'peer-unavailable') return console.warn(err);
+    if (err.message.includes(ids.phone) && call && !callLive) {
+      const stale = call;
+      call = null;
+      stale.close();
+      phoneFailures = 0; // not a network problem: the phone page just isn't open
+      phoneOffline = true;
+      setChip('phone', 'Phone: not online (open phone.html and tap Start)', 'bad');
+    }
   });
 });
 
@@ -137,7 +150,14 @@ function tick() {
   if (!peer || peer.disconnected) return;
   const now = Date.now();
 
-  if (call && !callLive && now - callStarted > PENDING_TIMEOUT) { call.close(); call = null; }
+  if (call && !callLive && now - callStarted > PENDING_TIMEOUT) {
+    diag.log('call attempt timed out without video');
+    const stale = call;
+    call = null;
+    stale.close();
+    phoneOffline = false; // it answered the signalling server, so it is online
+    phoneFailures++;
+  }
   if (!call) dialPhone();
 
   if (conn && !conn.open && now - connStarted > PENDING_TIMEOUT) { conn.close(); conn = null; }
@@ -148,15 +168,25 @@ function tick() {
 }
 
 function dialPhone() {
-  setChip('phone', 'Phone: calling…', 'wait');
+  if (phoneOffline) {
+    // keep the "not online" message while we keep trying
+  } else if (phoneFailures < 2) {
+    setChip('phone', 'Phone: calling…', 'wait');
+  } else {
+    setChip('phone', hasRelay
+      ? 'Phone: can\'t connect (see Diagnostics)'
+      : 'Phone: blocked between networks — needs a relay (see README)', 'bad');
+  }
   const c = peer.call(ids.phone, localStream);
   call = c; callStarted = Date.now(); callLive = false;
   tuneVideo(c, 800_000);
   logConnection(c.peerConnection, 'call');
   diag.log('calling phone');
-  c.on('stream', (stream) => {
+  onCallConnected(c, (stream) => {
     if (c !== call) return;
     callLive = true;
+    phoneFailures = 0;
+    phoneOffline = false;
     $reconnecting.hidden = true;
     remoteVideo.srcObject = stream;
     startStats(c);
@@ -169,9 +199,10 @@ function dialPhone() {
     const wasLive = callLive;
     call = null; callLive = false;
     stopStats();
+    if (!wasLive && !phoneOffline) phoneFailures++;
     // Keep the last frame on screen and redial straight away rather than going black.
     $reconnecting.hidden = !wasLive;
-    setChip('phone', 'Phone: reconnecting…', 'bad');
+    if (phoneFailures < 2) setChip('phone', 'Phone: reconnecting…', 'bad');
     setTimeout(tick, 500);
   };
   c.on('close', () => end('closed'));

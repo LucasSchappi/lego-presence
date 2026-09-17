@@ -50,6 +50,31 @@ navigator.connection?.addEventListener?.('change', () => {
   diag.log(`network changed ${c.type || ''} ${c.effectiveType || ''} ${c.downlink ?? ''}Mbps`);
 });
 
+// ---- Relay (TURN) -------------------------------------------------------------
+// Direct connections often fail between different networks (mobile data, most home routers
+// on both ends). A TURN relay carries the video when that happens. Callers must
+// `await iceReady` before creating a Peer so the relay is included.
+
+const iceReady = (async () => {
+  const url = window.PRESENCE_CONFIG?.turnCredentialsUrl;
+  if (!url) {
+    diag.log('no relay (TURN) configured: devices on different networks may fail to connect');
+    return false;
+  }
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const servers = await res.json();
+    if (!Array.isArray(servers) || !servers.length) throw new Error('no servers returned');
+    PEER_OPTIONS.config.iceServers.push(...servers);
+    diag.log(`relay ready (${servers.length} servers)`);
+    return true;
+  } catch (err) {
+    diag.log(`relay credentials failed: ${err.message}`);
+    return false;
+  }
+})();
+
 // Returns the room from ?room=..., or shows the room form and returns null.
 function getRoomOrShowForm() {
   const room = cleanRoom(new URLSearchParams(location.search).get('room'));
@@ -141,6 +166,21 @@ function watchIce(mediaConnection, onGone, graceMs = 15000) {
   pc.addEventListener('connectionstatechange', () => {
     if (pc.connectionState === 'failed') { clearTimeout(timer); onGone(); }
   });
+}
+
+// Calls `fn(stream)` once the call has media AND the connection is actually up. PeerJS's
+// 'stream' event fires as soon as the call is negotiated, even if the network then blocks
+// every route and no video ever arrives.
+function onCallConnected(mediaConnection, fn) {
+  const pc = mediaConnection.peerConnection;
+  let stream = null, done = false;
+  const check = () => {
+    if (done || !stream || !['connected', 'completed'].includes(pc.iceConnectionState)) return;
+    done = true;
+    fn(stream);
+  };
+  mediaConnection.on('stream', (s) => { stream = s; check(); });
+  pc.addEventListener('iceconnectionstatechange', check);
 }
 
 // ---- Video quality ----------------------------------------------------------

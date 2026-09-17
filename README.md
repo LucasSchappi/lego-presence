@@ -95,8 +95,26 @@ control.onEvent(9010, EventBusValue.MICROBIT_EVT_ANY, function () {
 })
 ```
 
+## Connecting across different networks (relay)
+
+When everyone is on the same Wi-Fi, devices connect directly. When the remote person is somewhere
+else (their home, mobile data), many routers and mobile networks block direct connections and the
+video never starts. The drive page then shows **"Phone: blocked between networks — needs a relay"**.
+
+A TURN relay fixes this by passing the video through a server when a direct route isn't possible
+(direct connections are still used whenever they work). To set one up (free, 20 GB/month):
+
+1. Sign up at https://www.metered.ca/stun-turn and create a TURN app.
+2. Copy its credentials URL. It looks like
+   `https://YOURAPP.metered.live/api/v1/turn/credentials?apiKey=YOUR_API_KEY`
+3. Paste it into `config.js` as `turnCredentialsUrl`, then commit and push.
+
+The key only hands out relay access, but the repo is public, so anyone who finds it could use your
+monthly allowance. If that matters, make the repo private (GitHub Pages on private repos needs a paid plan)
+or delete and recreate the key in Metered if it's abused.
+
 ## Limitations
 
-- Connections use public STUN only, with no TURN relay. Most home and mobile networks work.
-  Some strict corporate or school networks will block the video.
+- Without a relay (see above), the video only works when direct connections are possible.
+  Some strict corporate or school networks block the video even with a relay.
 - The computer needs Chrome or Edge (Web Bluetooth). Safari and Firefox can't talk to the micro:bit.

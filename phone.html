@@ -44,6 +44,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="config.js"></script>
 <script src="common.js"></script>
 <script>
 const room = getRoomOrShowForm();
@@ -72,6 +73,7 @@ document.getElementById('start').addEventListener('click', async () => {
   keepAwake();
   document.documentElement.requestFullscreen?.().catch(() => {});
   showIdle('Waiting for the remote person to call…');
+  await iceReady;
   connect();
 });
 
@@ -95,7 +97,7 @@ function onCall(call) {
   tuneVideo(call, 1_000_000);
   logConnection(call.peerConnection, 'call');
 
-  call.on('stream', (stream) => {
+  onCallConnected(call, (stream) => {
     if (call !== currentCall) return;
     remoteVideo.srcObject = stream;
     remoteVideo.play().catch(() => {});
