@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Presence · Base</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  main { max-width: 720px; margin: 0 auto; padding: 24px 16px; display: grid; gap: 16px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  h1 { margin: 0; font-size: 1.4rem; }
+  h2 { margin: 0 0 12px; font-size: 1rem; }
+  label { display: grid; gap: 4px; font-size: 0.85rem; color: var(--muted); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .note { color: var(--muted); font-size: 0.85rem; margin: 10px 0 0; }
+  .indicator { display: flex; gap: 12px; justify-content: center; font-size: 2.5rem; }
+  .indicator span { width: 88px; text-align: center; border-radius: 14px; border: 1px solid var(--line); opacity: 0.35; }
+  .indicator span.on { opacity: 1; background: var(--accent); color: #111; }
+  #log { font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--muted); max-height: 180px; overflow: auto; white-space: pre-wrap; margin: 0; }
+</style>
+</head>
+<body>
+<form id="room-form" class="center" hidden>
+  <div class="card">
+    <h1>💻 Base</h1>
+    <p>Enter the room name.</p>
+    <div class="row"><input name="room" autocomplete="off" required><button class="primary">Go</button></div>
+  </div>
+</form>
+
+<main id="app">
+  <div class="row" style="justify-content:space-between">
+    <h1>💻 Base · <span data-room></span></h1>
+    <div class="chips">
+      <span class="chip" id="sig">Offline</span>
+      <span class="chip" id="driver">No driver</span>
+      <span class="chip" id="out">Output</span>
+    </div>
+  </div>
+
+  <section>
+    <h2>How should left/right reach the stand?</h2>
+    <label>Output
+      <select id="mode">
+        <option value="keys">Key presses → Mbit app (needs keys.py running)</option>
+        <option value="uart">Web Bluetooth → micro:bit UART</option>
+        <option value="event">Web Bluetooth → micro:bit Event service</option>
+        <option value="none">Nothing (just test the connection)</option>
+      </select>
+    </label>
+
+    <div data-for="keys">
+      <p class="note">
+        Run <code>python3 keys.py</code> on this computer and open this page from
+        <a href="http://localhost:8765/base.html">http://localhost:8765</a>.
+        Keep the Mbit app as the focused window: the helper presses the real ← and → keys.
+      </p>
+      <div class="row" style="margin-top:10px">
+        <input id="helper-url" aria-label="Helper URL">
+        <button id="helper-test">Check helper</button>
+      </div>
+    </div>
+
+    <div data-for="uart" hidden>
+      <p class="note">
+        Sends <code>L</code>, <code>R</code> or <code>S</code> (stop), each followed by a newline.
+        On the micro:bit use <em>on bluetooth data received (new line)</em> with the Bluetooth
+        extension and <em>bluetooth uart service</em> started. Pair the micro:bit (or use a
+        "No pairing required" project setting) first.
+      </p>
+    </div>
+
+    <div data-for="event" hidden>
+      <p class="note">Writes (source, value) events. Match these to <em>on event from … with value …</em> blocks on the micro:bit.</p>
+      <div class="grid" style="margin-top:10px">
+        <label>Event source ID <input id="ev-src" type="number" value="9010"></label>
+        <label>Left pressed <input id="ev-left-down" type="number" value="1"></label>
+        <label>Left released <input id="ev-left-up" type="number" value="2"></label>
+        <label>Right pressed <input id="ev-right-down" type="number" value="3"></label>
+        <label>Right released <input id="ev-right-up" type="number" value="4"></label>
+      </div>
+    </div>
+
+    <div data-for="uart event" hidden class="row" style="margin-top:12px">
+      <button id="bt-connect" class="primary">Connect micro:bit</button>
+      <button id="bt-disconnect">Disconnect</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Live</h2>
+    <div class="indicator"><span id="ind-left">◀</span><span id="ind-right">▶</span></div>
+    <p class="note" style="text-align:center">Test locally: hold ← / → on this page, or the buttons below.</p>
+    <div class="row" style="justify-content:center;margin-top:8px">
+      <button class="test" data-dir="left">Test ◀</button>
+      <button class="test" data-dir="right">Test ▶</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Log</h2>
+    <pre id="log"></pre>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="common.js"></script>
+<script>
+const room = getRoomOrShowForm();
+const WATCHDOG_MS = 500;
+
+const UUID = {
+  uartService: '6e400001-b5a3-f393-e0a9-e50e24dcca9e',
+  eventService: 'e95d93af-251d-470a-a062-fa1922dfa9a8',
+  clientEvent: 'e95d5404-251d-470a-a062-fa1922dfa9a8',
+};
+
+const $ = (id) => document.getElementById(id);
+const logEl = $('log');
+function log(text) {
+  const line = `${new Date().toLocaleTimeString()}  ${text}\n`;
+  logEl.textContent = (line + logEl.textContent).slice(0, 5000);
+}
+
+// ---- Settings (remembered in this browser) --------------------------------
+
+const store = {
+  get(k, d) { try { return localStorage.getItem(`presence.${k}`) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(`presence.${k}`, v); } catch {} },
+};
+
+const modeSel = $('mode');
+modeSel.value = store.get('mode', 'keys');
+$('helper-url').value = store.get('helper',
+  location.protocol === 'http:' && /^(localhost|127\.0\.0\.1)$/.test(location.hostname)
+    ? location.origin : 'http://localhost:8765');
+document.querySelectorAll('.grid input').forEach((i) => {
+  i.value = store.get(i.id, i.value);
+  i.addEventListener('change', () => store.set(i.id, i.value));
+});
+$('helper-url').addEventListener('change', (e) => store.set('helper', e.target.value.replace(/\/$/, '')));
+
+function showModePanels() {
+  document.querySelectorAll('[data-for]').forEach((el) => {
+    el.hidden = !el.dataset.for.split(' ').includes(modeSel.value);
+  });
+}
+modeSel.addEventListener('change', () => {
+  stopMotion();
+  store.set('mode', modeSel.value);
+  showModePanels();
+  refreshOutputStatus();
+});
+showModePanels();
+
+// ---- Outputs ---------------------------------------------------------------
+
+let outputReady = false;
+let outputText = 'Not set up';
+
+function setOutput(ready, text) {
+  outputReady = ready;
+  outputText = text;
+  setChip('out', text, ready ? 'ok' : 'bad');
+  broadcastStatus();
+}
+
+// Key-press helper
+async function helper(path) {
+  const base = $('helper-url').value.replace(/\/$/, '');
+  const res = await fetch(base + path, { method: 'POST' });
+  if (!res.ok) throw new Error(`helper said ${res.status}`);
+}
+async function checkHelper() {
+  try {
+    await helper('/ping');
+    setOutput(true, 'Key helper ready');
+  } catch (err) {
+    setOutput(false, 'Key helper not found');
+    log(`Key helper unreachable: ${err.message}`);
+  }
+}
+$('helper-test').addEventListener('click', checkHelper);
+
+// Bluetooth
+let bt = { device: null, uartRx: null, clientEvent: null };
+let writeChain = Promise.resolve();
+
+function btWrite(char, bytes) {
+  // GATT allows one operation at a time, so queue writes.
+  writeChain = writeChain
+    .then(() => (char.properties.writeWithoutResponse
+      ? char.writeValueWithoutResponse(bytes)
+      : char.writeValueWithResponse(bytes)))
+    .catch((err) => log(`Bluetooth write failed: ${err.message}`));
+  return writeChain;
+}
+
+$('bt-connect').addEventListener('click', async () => {
+  if (!navigator.bluetooth) {
+    setOutput(false, 'No Web Bluetooth');
+    log('This browser has no Web Bluetooth. Use Chrome or Edge on desktop.');
+    return;
+  }
+  try {
+    const device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'BBC micro:bit' }],
+      optionalServices: [UUID.uartService, UUID.eventService],
+    });
+    device.addEventListener('gattserverdisconnected', () => {
+      bt = { device: null, uartRx: null, clientEvent: null };
+      setOutput(false, 'micro:bit disconnected');
+      log('micro:bit disconnected');
+    });
+    setOutput(false, 'Connecting…');
+    const server = await device.gatt.connect();
+    bt = { device, uartRx: null, clientEvent: null };
+
+    try {
+      const uart = await server.getPrimaryService(UUID.uartService);
+      // micro:bit swaps the usual Nordic RX/TX UUIDs, so pick whichever one is writable.
+      for (const c of await uart.getCharacteristics()) {
+        if (c.properties.write || c.properties.writeWithoutResponse) bt.uartRx = c;
+      }
+    } catch { /* UART service not in this program */ }
+
+    try {
+      const ev = await server.getPrimaryService(UUID.eventService);
+      bt.clientEvent = await ev.getCharacteristic(UUID.clientEvent);
+    } catch { /* Event service not in this program */ }
+
+    log(`Connected to ${device.name}. UART: ${bt.uartRx ? 'yes' : 'no'}, Event service: ${bt.clientEvent ? 'yes' : 'no'}`);
+    refreshOutputStatus();
+  } catch (err) {
+    setOutput(false, 'Bluetooth failed');
+    log(`Bluetooth: ${err.message}`);
+  }
+});
+
+$('bt-disconnect').addEventListener('click', () => bt.device?.gatt.disconnect());
+
+function refreshOutputStatus() {
+  const mode = modeSel.value;
+  if (mode === 'none') return setOutput(true, 'Test mode (no output)');
+  if (mode === 'keys') return checkHelper();
+  const char = mode === 'uart' ? bt.uartRx : bt.clientEvent;
+  if (!bt.device) return setOutput(false, 'micro:bit not connected');
+  if (!char) return setOutput(false, mode === 'uart' ? 'micro:bit has no UART service' : 'micro:bit has no Event service');
+  setOutput(true, `micro:bit ready`);
+}
+
+function sendEvent(value) {
+  const src = Number($('ev-src').value);
+  const bytes = new Uint8Array(4);
+  new DataView(bytes.buffer).setUint16(0, src, true);
+  new DataView(bytes.buffer).setUint16(2, Number(value), true);
+  return btWrite(bt.clientEvent, bytes);
+}
+
+const outputs = {
+  none: { start() {}, refresh() {}, stop() {} },
+  keys: {
+    start: (dir) => helper(`/key?dir=${dir}&state=down`).catch((e) => log(`Key helper: ${e.message}`)),
+    // Tell the helper we're still holding, so its own safety timer doesn't let go.
+    refresh: (dir) => helper(`/key?dir=${dir}&state=down`).catch(() => {}),
+    stop: (dir) => helper(`/key?dir=${dir}&state=up`).catch((e) => log(`Key helper: ${e.message}`)),
+  },
+  uart: {
+    start: (dir) => bt.uartRx && btWrite(bt.uartRx, new TextEncoder().encode(dir === 'left' ? 'L\n' : 'R\n')),
+    refresh() {},
+    stop: () => bt.uartRx && btWrite(bt.uartRx, new TextEncoder().encode('S\n')),
+  },
+  event: {
+    start: (dir) => bt.clientEvent && sendEvent($(`ev-${dir}-down`).value),
+    refresh() {},
+    stop: (dir) => bt.clientEvent && sendEvent($(`ev-${dir}-up`).value),
+  },
+};
+
+// ---- Motion state with a safety watchdog ----------------------------------
+
+let active = null;
+let watchdog = null;
+
+function move(dir) {
+  if (dir !== 'left' && dir !== 'right') return;
+  const out = outputs[modeSel.value];
+  if (active !== dir) {
+    stopMotion();
+    active = dir;
+    $(`ind-${dir}`).classList.add('on');
+    log(`▶ ${dir}`);
+    out.start(dir);
+  } else {
+    out.refresh(dir);
+  }
+  clearTimeout(watchdog);
+  watchdog = setTimeout(() => { log('Watchdog: no signal, stopping'); stopMotion(); }, WATCHDOG_MS);
+}
+
+function stopMotion() {
+  clearTimeout(watchdog);
+  if (!active) return;
+  const dir = active;
+  active = null;
+  $(`ind-${dir}`).classList.remove('on');
+  log(`■ stop`);
+  outputs[modeSel.value].stop(dir);
+}
+
+// Local test controls (repeat like the remote does, so the watchdog stays happy)
+let testTimer = null;
+function testPress(dir) { clearInterval(testTimer); move(dir); testTimer = setInterval(() => move(dir), 150); }
+function testRelease() { clearInterval(testTimer); testTimer = null; stopMotion(); }
+document.querySelectorAll('.test').forEach((b) => {
+  b.addEventListener('pointerdown', () => testPress(b.dataset.dir));
+  b.addEventListener('pointerup', testRelease);
+  b.addEventListener('pointerleave', () => testTimer && testRelease());
+});
+const KEYS = { ArrowLeft: 'left', ArrowRight: 'right' };
+addEventListener('keydown', (e) => {
+  if (!KEYS[e.key] || e.target.matches('input, select')) return;
+  e.preventDefault();
+  if (!e.repeat) testPress(KEYS[e.key]);
+});
+addEventListener('keyup', (e) => KEYS[e.key] && testTimer && testRelease());
+
+// ---- Peer connection from the remote driver -------------------------------
+
+let driver = null;
+let driverSeen = 0;
+const DRIVER_TIMEOUT_MS = 4000; // driver pings every second; closing a tab can take PeerJS ~30s to notice
+
+function broadcastStatus() {
+  if (driver?.open) driver.send({ type: 'status', ready: outputReady, text: outputText });
+}
+
+if (room) {
+  const peer = makePeer(peerIds(room).base, (t, s) => setChip('sig', t, s));
+  setChip('sig', 'Connecting…', 'wait');
+  peer.on('open', () => { setChip('sig', 'Online', 'ok'); log('Waiting for a driver'); });
+  peer.on('error', (err) => {
+    if (err.type === 'unavailable-id') {
+      setChip('sig', 'Room busy', 'bad');
+      log('Another base page is already open for this room. Close it and reload.');
+      peer.destroy();
+    } else {
+      log(`Peer error: ${err.type}`);
+    }
+  });
+
+  peer.on('connection', (c) => {
+    c.on('open', () => {
+      // One driver at a time: the newest takes over.
+      if (driver && driver !== c) driver.close();
+      driver = c;
+      driverSeen = Date.now();
+      setChip('driver', 'Driver connected', 'ok');
+      log('Driver connected');
+      broadcastStatus();
+    });
+    c.on('data', (msg) => {
+      if (c !== driver) return;
+      driverSeen = Date.now();
+      if (msg?.type === 'move') move(msg.dir);
+      else if (msg?.type === 'stop') stopMotion();
+    });
+    const end = () => {
+      if (c !== driver) return;
+      driver = null;
+      stopMotion();
+      setChip('driver', 'No driver', 'bad');
+      log('Driver left');
+    };
+    c.on('close', end);
+    c.on('error', end);
+  });
+
+  setInterval(() => {
+    if (driver && Date.now() - driverSeen > DRIVER_TIMEOUT_MS) {
+      log('Driver stopped responding');
+      driver.close();
+    }
+  }, 1000);
+
+  refreshOutputStatus();
+}
+</script>
+</body>
+</html>

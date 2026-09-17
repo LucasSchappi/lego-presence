@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Presence · Drive</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+  .stage { position: relative; flex: 1; min-height: 0; background: #000; }
+  #remote { width: 100%; height: 100%; object-fit: contain; }
+  #self {
+    position: absolute; right: 12px; bottom: 12px; width: 24vw; max-width: 200px;
+    border-radius: 10px; border: 2px solid rgba(255,255,255,.4); transform: scaleX(-1);
+  }
+  .stage .chips { position: absolute; top: 12px; left: 12px; right: 12px; }
+  #start-panel { position: absolute; inset: 0; }
+
+  .controls {
+    display: flex; align-items: center; justify-content: center; gap: 16px;
+    padding: 12px 16px max(12px, env(safe-area-inset-bottom));
+    background: var(--panel); border-top: 1px solid var(--line); flex-wrap: wrap;
+  }
+  .arrow {
+    width: 96px; height: 72px; font-size: 2rem; border-radius: 16px;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+  }
+  .arrow.active { background: var(--accent); color: #111; border-color: var(--accent); }
+  .arrow:disabled { opacity: 0.4; cursor: not-allowed; }
+  .hint { color: var(--muted); font-size: 0.85rem; width: 100%; text-align: center; }
+</style>
+</head>
+<body>
+<form id="room-form" class="center" hidden>
+  <div class="card">
+    <h1>🕹️ Drive</h1>
+    <p>Enter the room name.</p>
+    <div class="row"><input name="room" autocomplete="off" required><button class="primary">Go</button></div>
+  </div>
+</form>
+
+<div id="app">
+  <div class="stage">
+    <video id="remote" autoplay playsinline></video>
+    <video id="self" autoplay playsinline muted hidden></video>
+    <div class="chips">
+      <span class="chip" id="sig">Offline</span>
+      <span class="chip" id="phone">Phone</span>
+      <span class="chip" id="base">Computer</span>
+      <span class="chip" id="stand">Stand</span>
+    </div>
+    <div id="start-panel" class="center">
+      <div class="card">
+        <h1>🕹️ Drive · <span data-room></span></h1>
+        <p id="start-text">Start to share your camera and mic with the phone and take control of the stand.</p>
+        <button id="start" class="primary">Start</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="arrow" id="left" data-dir="left" disabled aria-label="Turn left">◀</button>
+    <button id="mic" aria-pressed="false" disabled>🎤 Mute</button>
+    <button id="cam" aria-pressed="false" disabled>📷 Hide</button>
+    <button class="arrow" id="right" data-dir="right" disabled aria-label="Turn right">▶</button>
+    <div class="hint">Hold a button (or the ← → keys) to turn the stand.</div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="common.js"></script>
+<script>
+const room = getRoomOrShowForm();
+const ids = room && peerIds(room);
+const remoteVideo = document.getElementById('remote');
+const selfVideo = document.getElementById('self');
+const arrows = [...document.querySelectorAll('.arrow')];
+
+const PENDING_TIMEOUT = 10000;
+const RETRY_EVERY = 3000;
+const HOLD_REPEAT = 150; // base stops the motor if it hears nothing for ~500ms
+
+let peer = null;
+let localStream = null;
+let call = null, callStarted = 0, callLive = false;
+let conn = null, connStarted = 0;
+
+document.getElementById('start').addEventListener('click', async () => {
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: { echoCancellation: true, noiseSuppression: true },
+    });
+  } catch (err) {
+    document.getElementById('start-text').textContent =
+      `Camera/mic blocked: ${err.message}. Allow access and reload.`;
+    return;
+  }
+  selfVideo.srcObject = localStream;
+  selfVideo.hidden = false;
+  document.getElementById('start-panel').hidden = true;
+  document.getElementById('mic').disabled = false;
+  document.getElementById('cam').disabled = false;
+  keepAwake();
+
+  peer = makePeer(null, (t, s) => setChip('sig', t, s));
+  setChip('sig', 'Connecting…', 'wait');
+  peer.on('open', () => {
+    setChip('sig', 'Online', 'ok');
+    tick();
+    setInterval(tick, RETRY_EVERY);
+  });
+  peer.on('error', (err) => {
+    // "peer-unavailable" just means that device isn't online yet; tick() retries.
+    if (err.type !== 'peer-unavailable') console.warn(err);
+  });
+});
+
+// Keeps both connections alive: (re)dials whichever is missing or stuck.
+function tick() {
+  if (!peer || peer.disconnected) return;
+  const now = Date.now();
+
+  if (call && !callLive && now - callStarted > PENDING_TIMEOUT) { call.close(); call = null; }
+  if (!call) dialPhone();
+
+  if (conn && !conn.open && now - connStarted > PENDING_TIMEOUT) { conn.close(); conn = null; }
+  if (!conn) dialBase();
+}
+
+function dialPhone() {
+  setChip('phone', 'Phone: calling…', 'wait');
+  const c = peer.call(ids.phone, localStream);
+  call = c; callStarted = Date.now(); callLive = false;
+  c.on('stream', (stream) => {
+    if (c !== call) return;
+    callLive = true;
+    remoteVideo.srcObject = stream;
+    remoteVideo.play().catch(() => {});
+    setChip('phone', 'Phone: live', 'ok');
+  });
+  const end = () => {
+    if (c !== call) return;
+    call = null; callLive = false;
+    remoteVideo.srcObject = null;
+    setChip('phone', 'Phone: offline', 'bad');
+  };
+  c.on('close', end);
+  c.on('error', end);
+  watchIce(c, () => { end(); c.close(); });
+}
+
+function dialBase() {
+  setChip('base', 'Computer: connecting…', 'wait');
+  const c = peer.connect(ids.base, { reliable: true });
+  conn = c; connStarted = Date.now();
+  c.on('open', () => {
+    if (c !== conn) return;
+    setChip('base', 'Computer: live', 'ok');
+    arrows.forEach((b) => (b.disabled = false));
+    const beat = setInterval(() => (c.open ? c.send({ type: 'ping' }) : clearInterval(beat)), 1000);
+  });
+  c.on('data', (msg) => {
+    if (msg?.type === 'status') {
+      setChip('stand', `Stand: ${msg.text}`, msg.ready ? 'ok' : 'bad');
+    }
+  });
+  const end = () => {
+    if (c !== conn) return;
+    conn = null;
+    release();
+    arrows.forEach((b) => (b.disabled = true));
+    setChip('base', 'Computer: offline', 'bad');
+    setChip('stand', 'Stand', '');
+  };
+  c.on('close', end);
+  c.on('error', end);
+}
+
+// ---- Left / right control -------------------------------------------------
+
+let held = null;
+let holdTimer = null;
+
+function send(msg) {
+  if (conn?.open) conn.send(msg);
+}
+
+function press(dir) {
+  if (held === dir || !conn?.open) return;
+  release();
+  held = dir;
+  document.getElementById(dir).classList.add('active');
+  send({ type: 'move', dir });
+  holdTimer = setInterval(() => send({ type: 'move', dir }), HOLD_REPEAT);
+}
+
+function release() {
+  if (!held) return;
+  clearInterval(holdTimer);
+  document.getElementById(held).classList.remove('active');
+  held = null;
+  send({ type: 'stop' });
+}
+
+arrows.forEach((btn) => {
+  btn.addEventListener('pointerdown', (e) => {
+    btn.setPointerCapture(e.pointerId);
+    press(btn.dataset.dir);
+  });
+  btn.addEventListener('pointerup', release);
+  btn.addEventListener('pointercancel', release);
+  btn.addEventListener('lostpointercapture', release);
+  btn.addEventListener('contextmenu', (e) => e.preventDefault());
+});
+
+const KEYS = { ArrowLeft: 'left', ArrowRight: 'right' };
+addEventListener('keydown', (e) => {
+  if (!KEYS[e.key]) return;
+  e.preventDefault();
+  if (!e.repeat) press(KEYS[e.key]);
+});
+addEventListener('keyup', (e) => {
+  if (KEYS[e.key] === held) release();
+});
+addEventListener('blur', release);
+document.addEventListener('visibilitychange', () => document.hidden && release());
+
+// ---- Mute / hide camera ---------------------------------------------------
+
+function toggleTrack(buttonId, kind, onLabel, offLabel) {
+  const btn = document.getElementById(buttonId);
+  btn.addEventListener('click', () => {
+    const tracks = kind === 'audio' ? localStream.getAudioTracks() : localStream.getVideoTracks();
+    const off = btn.getAttribute('aria-pressed') !== 'true';
+    tracks.forEach((t) => (t.enabled = !off));
+    btn.setAttribute('aria-pressed', String(off));
+    btn.textContent = off ? offLabel : onLabel;
+  });
+}
+toggleTrack('mic', 'audio', '🎤 Mute', '🎤 Unmute');
+toggleTrack('cam', 'video', '📷 Hide', '📷 Show');
+</script>
+</body>
+</html>

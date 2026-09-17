@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lego Presence</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="center">
+  <div class="card">
+    <h1>🧱 Lego Presence</h1>
+    <p>Pick a room name, then open the right page on each device. All three must use the same room.</p>
+    <form id="room-picker" style="margin-bottom:16px">
+      <input name="room" placeholder="room name, e.g. kitchen-bot" autocomplete="off" required>
+    </form>
+    <div class="role-list">
+      <a data-page="phone.html" href="phone.html"><strong>📱 Phone on the stand</strong><small>Shows the remote person, sends the room's camera and mic back.</small></a>
+      <a data-page="base.html" href="base.html"><strong>💻 Computer (Bluetooth base)</strong><small>Receives left/right commands and passes them to the micro:bit.</small></a>
+      <a data-page="drive.html" href="drive.html"><strong>🕹️ Remote person</strong><small>Video call with the phone, and left/right controls.</small></a>
+    </div>
+  </div>
+</div>
+<script>
+  const input = document.querySelector('#room-picker input');
+  const clean = (v) => v.toLowerCase().replace(/[^a-z0-9_-]/g, '').slice(0, 40);
+  document.querySelector('#room-picker').addEventListener('submit', (e) => e.preventDefault());
+  document.querySelectorAll('[data-page]').forEach((link) => {
+    link.addEventListener('click', (e) => {
+      const room = clean(input.value);
+      if (!room) { e.preventDefault(); input.focus(); return; }
+      link.href = `${link.dataset.page}?room=${encodeURIComponent(room)}`;
+    });
+  });
+</script>
+</body>
+</html>
