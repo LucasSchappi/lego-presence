@@ -42,7 +42,7 @@
     <h2>How should left/right reach the stand?</h2>
     <label>Output
       <select id="mode">
-        <option value="keys">Key presses → Mbit app (needs keys.py running)</option>
+        <option value="keys">Click Mbit's ◀ ▶ buttons (needs keys.py running)</option>
         <option value="uart">Web Bluetooth → micro:bit UART</option>
         <option value="event">Web Bluetooth → micro:bit Event service</option>
         <option value="none">Nothing (just test the connection)</option>
@@ -51,9 +51,11 @@
 
     <div data-for="keys">
       <p class="note">
-        Run <code>python3 keys.py</code> on this computer and open this page from
+        Once, run <code>python3 keys.py --calibrate</code> to show the helper where Mbit's ◀ and ▶
+        buttons are. Then run <code>python3 keys.py</code> and open this page from
         <a href="http://localhost:8765/base.html">http://localhost:8765</a>.
-        Keep the Mbit app as the focused window: the helper presses the real ← and → keys.
+        Leave Mbit open and connected: while someone drives, the helper brings Mbit to the front
+        and holds the mouse on its buttons. Don't move the Mbit window after calibrating.
       </p>
       <div class="row" style="margin-top:10px">
         <input id="helper-url" aria-label="Helper URL">
@@ -90,7 +92,7 @@
   <section>
     <h2>Live</h2>
     <div class="indicator"><span id="ind-left">◀</span><span id="ind-right">▶</span></div>
-    <p class="note" style="text-align:center">Test locally: hold ← / → on this page, or the buttons below.</p>
+    <p class="note" style="text-align:center">Test locally: each click (or ← / → key) nudges the stand for half a second.</p>
     <div class="row" style="justify-content:center;margin-top:8px">
       <button class="test" data-dir="left">Test ◀</button>
       <button class="test" data-dir="right">Test ▶</button>
@@ -165,19 +167,20 @@ function setOutput(ready, text) {
   broadcastStatus();
 }
 
-// Key-press helper
+// keys.py helper (clicks Mbit's buttons)
 async function helper(path) {
   const base = $('helper-url').value.replace(/\/$/, '');
   const res = await fetch(base + path, { method: 'POST' });
-  if (!res.ok) throw new Error(`helper said ${res.status}`);
+  if (!res.ok) throw new Error((await res.text()) || `helper said ${res.status}`);
 }
 async function checkHelper() {
   try {
     await helper('/ping');
-    setOutput(true, 'Key helper ready');
+    setOutput(true, 'Helper ready');
   } catch (err) {
-    setOutput(false, 'Key helper not found');
-    log(`Key helper unreachable: ${err.message}`);
+    const notRunning = err instanceof TypeError; // fetch itself failed
+    setOutput(false, notRunning ? 'Helper not running' : 'Helper not set up');
+    log(notRunning ? 'Helper unreachable: is python3 keys.py running?' : `Helper: ${err.message}`);
   }
 }
 $('helper-test').addEventListener('click', checkHelper);
@@ -260,10 +263,10 @@ function sendEvent(value) {
 const outputs = {
   none: { start() {}, refresh() {}, stop() {} },
   keys: {
-    start: (dir) => helper(`/key?dir=${dir}&state=down`).catch((e) => log(`Key helper: ${e.message}`)),
+    start: (dir) => helper(`/press?dir=${dir}&state=down`).catch((e) => log(`Helper: ${e.message}`)),
     // Tell the helper we're still holding, so its own safety timer doesn't let go.
-    refresh: (dir) => helper(`/key?dir=${dir}&state=down`).catch(() => {}),
-    stop: (dir) => helper(`/key?dir=${dir}&state=up`).catch((e) => log(`Key helper: ${e.message}`)),
+    refresh: (dir) => helper(`/press?dir=${dir}&state=down`).catch(() => {}),
+    stop: (dir) => helper(`/press?dir=${dir}&state=up`).catch((e) => log(`Helper: ${e.message}`)),
   },
   uart: {
     start: (dir) => bt.uartRx && btWrite(bt.uartRx, new TextEncoder().encode(dir === 'left' ? 'L\n' : 'R\n')),
@@ -308,22 +311,30 @@ function stopMotion() {
   outputs[modeSel.value].stop(dir);
 }
 
-// Local test controls (repeat like the remote does, so the watchdog stays happy)
+// Local test: a short nudge rather than press-and-hold, because the helper takes over the
+// mouse (and brings Mbit to the front), so this page never sees the button being let go.
+const NUDGE_MS = 500;
 let testTimer = null;
-function testPress(dir) { clearInterval(testTimer); move(dir); testTimer = setInterval(() => move(dir), 150); }
-function testRelease() { clearInterval(testTimer); testTimer = null; stopMotion(); }
+function nudge(dir) {
+  clearInterval(testTimer);
+  const until = Date.now() + NUDGE_MS;
+  move(dir);
+  testTimer = setInterval(() => {
+    if (Date.now() < until) return move(dir);
+    clearInterval(testTimer);
+    testTimer = null;
+    stopMotion();
+  }, 150);
+}
 document.querySelectorAll('.test').forEach((b) => {
-  b.addEventListener('pointerdown', () => testPress(b.dataset.dir));
-  b.addEventListener('pointerup', testRelease);
-  b.addEventListener('pointerleave', () => testTimer && testRelease());
+  b.addEventListener('click', () => nudge(b.dataset.dir));
 });
 const KEYS = { ArrowLeft: 'left', ArrowRight: 'right' };
 addEventListener('keydown', (e) => {
   if (!KEYS[e.key] || e.target.matches('input, select')) return;
   e.preventDefault();
-  if (!e.repeat) testPress(KEYS[e.key]);
+  if (!e.repeat) nudge(KEYS[e.key]);
 });
-addEventListener('keyup', (e) => KEYS[e.key] && testTimer && testRelease());
 
 // ---- Peer connection from the remote driver -------------------------------
 

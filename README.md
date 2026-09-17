@@ -25,24 +25,35 @@ The computer doesn't need the hosted copy (see step 2).
 
 ## 2. Computer (Bluetooth base)
 
+Open the Mbit app and connect it to the stand. Then, **once**, show the helper where Mbit's buttons are:
+
+```sh
+python3 keys.py --calibrate     # hover over ◀, press Enter; hover over ▶, press Enter
+```
+
+After that, each time:
+
 ```sh
 python3 keys.py
 ```
 
 Open **http://localhost:8765/base.html?room=YOURROOM** in Chrome or Edge, then choose an output:
 
-| Output | What it does | Use when |
-|---|---|---|
-| **Key presses → Mbit app** (default) | `keys.py` holds the real ← / → keys down while the remote person holds a button | The Mbit app already turns the stand with the arrow keys. **Keep the Mbit app as the focused window.** |
-| **Web Bluetooth → UART** | Sends `L`, `R`, `S` (stop) lines to the micro:bit | You'd rather skip the Mbit app |
-| **Web Bluetooth → Event service** | Sends (source, value) events | Same as above, using event blocks |
-| **Nothing** | Only shows the arrows on screen | Testing the connection |
+| Output | What it does |
+|---|---|
+| **Click Mbit's ◀ ▶ buttons** (default) | While the remote person holds a button, `keys.py` brings Mbit to the front, holds the mouse down on Mbit's matching button, then puts your pointer back |
+| **Web Bluetooth → UART** | Sends `L`, `R`, `S` (stop) lines straight to the micro:bit (no Mbit app) |
+| **Web Bluetooth → Event service** | Sends (source, value) events straight to the micro:bit |
+| **Nothing** | Only shows the arrows on screen, for testing the connection |
 
-**macOS:** the first time, allow your terminal app under System Settings → Privacy & Security →
-**Accessibility**, then restart `keys.py`. Without that permission, macOS silently ignores the key presses.
+- **Don't move or resize the Mbit window** after calibrating; if you do, run `--calibrate` again.
+- The helper takes over the mouse while someone drives, so leave the computer alone during a session.
+- **macOS:** the first time, allow your terminal app under System Settings → Privacy & Security →
+  **Accessibility**, then restart `keys.py`. Without that permission, macOS silently ignores the clicks.
+- `python3 keys.py --mode keys` presses the ← / → keys instead, for apps that use the keyboard.
 
-Use the **Test ◀ / Test ▶** buttons on the page to check that the stand moves before
-bringing in the remote person.
+The **Test ◀ / Test ▶** buttons on the page nudge the stand for half a second, so you can check
+it works before bringing in the remote person.
 
 ## 3. Phone on the stand
 
@@ -59,7 +70,7 @@ the stand are ready.
 ## Safety
 
 - If commands stop arriving for 0.5 s (dropped connection, closed tab), `base.html` stops the stand.
-- `keys.py` also lets go of the key after 0.6 s without a refresh.
+- `keys.py` also lets go of the mouse button after 0.6 s without a refresh.
 - `keys.py` only listens on `127.0.0.1` and only accepts requests from localhost pages. To use a
   hosted `base.html` instead, add `--allow-origin https://your-site`.
 
