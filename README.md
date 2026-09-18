@@ -4,9 +4,16 @@ Browser-based, peer-to-peer telepresence for a micro:bit + Lego Technic phone st
 
 ```
  Remote person (drive.html) ──── video + audio (both ways) ────  Phone on stand (phone.html)
-            │
-            └──── ◀ / ▶ commands ────  Computer (base.html) ──► Mbit app / micro:bit ──► stand
+            │                                                            │ Bluetooth
+            └──── ◀ / ▶ commands ──┬─────────────────────────────────────┘
+                                   └──  Computer (base.html) ──► Bluetooth ──► micro:bit
 ```
+
+**Either the phone or the computer can hold the Bluetooth link to the micro:bit.** The phone
+doing it means no computer is needed at all — but that needs a browser with Web Bluetooth:
+Chrome on Android, or an app like [Bluefy](https://apps.apple.com/app/bluefy-web-ble-browser/id1492822055)
+on iPhone, since iPhone Safari can't do Bluetooth. The phone page shows a **🔵 Connect stand**
+button when its browser can.
 
 - Video, audio and commands travel **directly between devices** over WebRTC.
 - The free PeerJS cloud server is used only to introduce the devices to each other
@@ -23,14 +30,19 @@ need a hosted copy. Any static host works, for example:
 
 The computer doesn't need the hosted copy (see step 2).
 
-## 2. Computer (Bluetooth base)
+## 2. Whoever drives the stand: the phone, or a computer
 
-**Close the Mbit app** (the micro:bit only accepts one Bluetooth connection), then in **Chrome or Edge** open:
+**Option A — the phone (no computer needed).** Open `phone.html` in Chrome on Android or Bluefy
+on iPhone, tap **Start**, then **🔵 Connect stand** and pick your micro:bit.
+
+**Option B — a computer.** Close the Mbit app (the micro:bit only accepts one Bluetooth
+connection), then in **Chrome or Edge** open:
 
 **https://lucasschappi.github.io/lego-presence/base.html?room=YOURROOM**
 
 Click **Connect micro:bit**, pick your micro:bit, and use **Test ◀ / Test ▶** to check the stand moves.
-The page sends the same Bluetooth commands as the Mbit app, over the micro:bit's UART service:
+
+Either way the same commands go out over the micro:bit's UART service, exactly what the Mbit app sends:
 
 | Button | Command |
 |---|---|
@@ -38,10 +50,10 @@ The page sends the same Bluetooth commands as the Mbit app, over the micro:bit's
 | ▶ pressed | `D#` |
 | released | `0#` |
 
-(Mbit's spin buttons use `E#` / `F#`; you can change the commands on the page.) If the micro:bit
-drops out, the page keeps trying to reconnect until you click **Disconnect**.
+(Mbit's spin buttons use `E#` / `F#`; the computer page lets you change the commands.) If the
+micro:bit drops out, both pages keep trying to reconnect.
 
-### Other outputs
+### Other outputs on the computer page
 
 | Output | What it does |
 |---|---|

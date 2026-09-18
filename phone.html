@@ -41,18 +41,22 @@
       <h1>📱 Phone · <span data-room></span></h1>
       <p id="idle-text">Tap start to turn on the camera and wait for the remote person.</p>
       <button id="start" class="primary">Start</button>
+      <p class="note" id="bt-note" hidden style="color:var(--muted);font-size:0.85rem;margin:14px 0 0"></p>
     </div>
   </div>
 
   <div class="top chips">
     <span class="chip" id="sig">Offline</span>
     <span class="chip" id="call">No call</span>
+    <span class="chip" id="stand" hidden>Stand</span>
+    <button id="bt" class="chip" hidden>🔵 Connect stand</button>
   </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="config.js"></script>
 <script src="common.js"></script>
+<script src="stand.js"></script>
 <script>
 const room = getRoomOrShowForm();
 const grid = document.getElementById('grid');
@@ -64,6 +68,7 @@ const MAX_DRIVERS = 4;
 const TOTAL_BITRATE = 1_200_000; // shared between drivers so the phone's upload doesn't choke
 const calls = new Map();         // driver peer id → { call, tile, setBitrate, live }
 const diagConns = new Map();     // driver peer id → data connection
+const driverNames = new Map();   // driver peer id → name
 const turnedAway = new Map();    // driver peer id → time we last refused them (phone full)
 
 function showIdle(text) {
@@ -119,6 +124,7 @@ function onCall(call) {
 
   const tile = previous?.tile || makeTile();
   tile.querySelector('.name').textContent = name;
+  driverNames.set(id, name);
   const entry = { call, tile, live: false, setBitrate: null };
   calls.set(id, entry);
 
@@ -183,18 +189,79 @@ function layout() {
 }
 addEventListener('resize', layout);
 
-// The drive page opens a data connection just to read this phone's diagnostics log.
+// ---- Driving the stand from this phone -------------------------------------
+// Only possible where the browser has Web Bluetooth: Chrome on Android, or an app like
+// Bluefy on iPhone. Otherwise the computer page (base.html) does this job.
+
+const link = new MicrobitLink({
+  log: (m) => diag.log(m),
+  onStatus: (ready, text) => {
+    setChip('stand', `Stand: ${text}`, ready ? 'ok' : 'bad');
+    document.getElementById('stand').hidden = false;
+    document.getElementById('bt').hidden = ready;
+    broadcastStand();
+  },
+});
+
+const stand = new StandControl({
+  output: {
+    start: (dir) => link.sendText(MBIT_COMMANDS[dir]),
+    stop: () => link.sendText(MBIT_COMMANDS.stop),
+  },
+  log: (m) => diag.log(m),
+  onChange: broadcastStand,
+});
+
+if (MicrobitLink.supported) {
+  document.getElementById('bt').hidden = false;
+} else {
+  const note = document.getElementById('bt-note');
+  note.hidden = false;
+  note.textContent = 'This browser can\'t do Bluetooth, so the computer page drives the stand. '
+    + 'For the phone to drive it, open this page in Chrome (Android) or Bluefy (iPhone).';
+}
+
+document.getElementById('bt').addEventListener('click', async () => {
+  try {
+    await link.connect();
+  } catch (err) {
+    diag.log(`Bluetooth: ${err.message}`);
+    setChip('stand', `Stand: ${err.message}`, 'bad');
+    document.getElementById('stand').hidden = false;
+  }
+});
+
+function broadcastStand() {
+  const msg = {
+    type: 'stand',
+    from: 'phone',
+    ready: link.ready,
+    text: link.text,
+    controller: stand.controller ? driverNames.get(stand.controller) || 'someone' : null,
+    controllerId: stand.controller,
+  };
+  diagConns.forEach((conn) => conn.open && conn.send(msg));
+}
+
+// The drive page opens one data connection for diagnostics, driving commands and status.
 function onDiagConnection(conn) {
   if (conn.metadata?.kind !== 'diag') return conn.close();
   const push = (line) => conn.open && conn.send({ type: 'diag', line });
   const cleanup = () => {
     diag.listeners.delete(push);
+    stand.stop(conn.peer); // don't leave the stand turning if they vanish mid-press
     if (diagConns.get(conn.peer) === conn) diagConns.delete(conn.peer);
   };
+  conn.on('data', (msg) => {
+    if (diagConns.get(conn.peer) !== conn) return;
+    if (msg?.type === 'move') stand.move(conn.peer, msg.dir, msg.press !== false);
+    else if (msg?.type === 'stop') stand.stop(conn.peer);
+  });
   conn.on('open', () => {
     diagConns.get(conn.peer)?.close();
     diagConns.set(conn.peer, conn);
     conn.send({ type: 'diag-all', lines: diag.lines });
+    broadcastStand();
     // Their log link can open after we refused the call, so tell them now.
     if (Date.now() - (turnedAway.get(conn.peer) || 0) < 30000 && !calls.has(conn.peer)) {
       conn.send({ type: 'full', max: MAX_DRIVERS });

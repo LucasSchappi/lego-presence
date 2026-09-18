@@ -391,6 +391,22 @@ function dialPhone() {
   watchIce(c, () => { end('connection lost'); c.close(); });
 }
 
+// Either the phone or the computer can hold the Bluetooth link to the micro:bit, so both
+// report their status and we show whichever one can actually drive the stand.
+const standStatus = { phone: null, base: null };
+
+function showStand(from, msg) {
+  standStatus[from] = msg;
+  const best = [standStatus.phone, standStatus.base].find((m) => m?.ready)
+    || standStatus.phone || standStatus.base;
+  if (!best) return setChip('stand', 'Stand', '');
+  const via = best === standStatus.phone ? 'phone' : 'computer';
+  let text = `Stand: ${best.text} (via ${via})`;
+  if (best.drivers > 1) text += ` · ${best.drivers} drivers`;
+  if (best.controller) text += ` · ${best.controllerId === peer.id ? 'you are' : `${best.controller} is`} steering`;
+  setChip('stand', text, best.ready ? 'ok' : 'bad');
+}
+
 function dialPhoneDiag() {
   const c = peer.connect(ids.phone, { reliable: true, metadata: { kind: 'diag' } });
   diagConn = c; diagStarted = Date.now();
@@ -400,10 +416,23 @@ function dialPhoneDiag() {
       setChip('phone', `Phone: full (${msg.max} drivers already)`, 'bad');
       return;
     }
+    if (msg?.type === 'stand') return showStand('phone', msg);
     if (msg?.type === 'diag-all') phoneLog = msg.lines.slice();
     else if (msg?.type === 'diag') { phoneLog.push(msg.line); if (phoneLog.length > 600) phoneLog.shift(); }
   });
-  const end = () => { if (c === diagConn) diagConn = null; };
+  c.on('open', () => {
+    if (c !== diagConn) return;
+    updateArrows();
+    const beat = setInterval(() => (c.open ? c.send({ type: 'ping' }) : clearInterval(beat)), 1000);
+  });
+  const end = () => {
+    if (c !== diagConn) return;
+    diagConn = null;
+    standStatus.phone = null;
+    updateArrows();
+    if (!canDrive()) release();
+    showStand('phone', null);
+  };
   c.on('close', end);
   c.on('error', end);
 }
@@ -463,24 +492,20 @@ function dialBase() {
   c.on('open', () => {
     if (c !== conn) return;
     setChip('base', 'Computer: live', 'ok');
-    arrows.forEach((b) => (b.disabled = false));
+    updateArrows();
     const beat = setInterval(() => (c.open ? c.send({ type: 'ping' }) : clearInterval(beat)), 1000);
   });
   c.on('data', (msg) => {
-    if (msg?.type === 'status') {
-      let text = `Stand: ${msg.text}`;
-      if (msg.drivers > 1) text += ` · ${msg.drivers} drivers`;
-      if (msg.controller) text += ` · ${msg.controllerId === peer.id ? 'you are' : `${msg.controller} is`} steering`;
-      setChip('stand', text, msg.ready ? 'ok' : 'bad');
-    }
+    if (msg?.type === 'status') showStand('base', msg);
   });
   const end = () => {
     if (c !== conn) return;
     conn = null;
-    release();
-    arrows.forEach((b) => (b.disabled = true));
+    standStatus.base = null;
+    updateArrows();
+    if (!canDrive()) release();
     setChip('base', 'Computer: offline', 'bad');
-    setChip('stand', 'Stand', '');
+    showStand('base', null);
   };
   c.on('close', end);
   c.on('error', end);
@@ -493,10 +518,16 @@ let holdTimer = null;
 
 function send(msg) {
   if (conn?.open) conn.send(msg);
+  if (diagConn?.open) diagConn.send(msg);
+}
+
+const canDrive = () => !!(conn?.open || diagConn?.open);
+function updateArrows() {
+  arrows.forEach((b) => (b.disabled = !canDrive()));
 }
 
 function press(dir) {
-  if (held === dir || !conn?.open) return;
+  if (held === dir || !canDrive()) return;
   release();
   held = dir;
   document.getElementById(dir).classList.add('active');
