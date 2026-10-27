@@ -187,6 +187,10 @@ function onDriverConnection(conn) {
     else if (msg?.type === 'note') piano.move(id, msg.key, msg.press !== false);
     else if (msg?.type === 'note-stop') piano.stop(id);
     else if (msg?.type === 'tap') taps.tap(msg.key);
+    else if (msg?.type === 'auto' && !!msg.on !== auto.on) {
+      auto.set(!!msg.on);
+      if (auto.on) keepAwake();
+    }
   });
   conn.on('open', () => {
     // The same driver reconnecting replaces its old link; anyone else is added.

@@ -43,6 +43,8 @@
   dialog::backdrop { background: rgba(0,0,0,.6); }
   #diag-text { width: 100%; height: 55vh; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; font: 11px/1.4 ui-monospace, Menlo, monospace; }
   .hint { color: var(--muted); font-size: 0.85rem; width: 100%; text-align: center; }
+  .actions { width: 100%; justify-content: center; }
+  #auto[aria-pressed="true"] { background: var(--accent); color: #111; border-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -127,7 +129,11 @@
       </div>
     </div>
 
-    <div class="hint">Hold a button (or the arrow keys) to move the stand. <button id="diag-open">🩺 Diagnostics</button></div>
+    <div class="row actions">
+      <button id="auto" aria-pressed="false" disabled title="Runs on the phone: random colours and moves by itself">🎲 Auto: off</button>
+      <button id="diag-open">🩺 Diagnostics</button>
+    </div>
+    <div class="hint">Hold a button (or the arrow keys) to move the stand. Steering switches Auto off.</div>
   </div>
 </div>
 
@@ -303,11 +309,11 @@ function showStand(from, msg) {
   const best = [standStatus.phone, standStatus.base].find((m) => m?.ready)
     || standStatus.phone || standStatus.base;
   showSwitches(best?.switches);
+  showAuto(standStatus.phone?.auto);
   if (!best) return setChip('stand', 'Stand', '');
   const via = best === standStatus.phone ? 'phone' : 'computer';
   let text = `Stand: ${best.text} (via ${via})`;
   if (best.drivers > 1) text += ` · ${best.drivers} drivers`;
-  if (best.auto) text += ' · 🎲 Auto on (steering takes over)';
   if (best.controller) text += ` · ${best.controllerId === peer.id ? 'you are' : `${best.controller} is`} steering`;
   setChip('stand', text, best.ready ? 'ok' : 'bad');
 }
@@ -349,7 +355,18 @@ function send(msg) {
 const canDrive = () => !!(baseConn?.open || phoneConn?.open);
 function updateButtons() {
   standButtons.forEach((b) => (b.disabled = !canDrive()));
+  $('auto').disabled = !phoneConn?.open;
 }
+
+// Auto runs on the phone; this switches it on and off there, and shows what the phone reports.
+function showAuto(on) {
+  $('auto').setAttribute('aria-pressed', String(!!on));
+  $('auto').textContent = `🎲 Auto: ${on ? 'on' : 'off'}`;
+}
+$('auto').addEventListener('click', () => {
+  if (!phoneConn?.open) return;
+  phoneConn.send({ type: 'auto', on: $('auto').getAttribute('aria-pressed') !== 'true' });
+});
 
 // Moving and the piano keys are held. While held they repeat, because the stand lets go by
 // itself when the repeats stop.
