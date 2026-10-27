@@ -1,12 +1,12 @@
 # Lego Presence
 
-Browser-based, peer-to-peer telepresence for a micro:bit + Lego Technic phone stand.
+Browser-based remote control for a micro:bit + Lego Technic phone stand. There's no video or audio:
+the phone just drives the stand, by itself (🎲 Auto) or from a remote control page.
 
 ```
- Remote person (drive.html) ──── video + audio (both ways) ────  Phone on stand (phone.html)
-            │                                                            │ Bluetooth
-            └──── ◀ / ▶ commands ──┬─────────────────────────────────────┘
-                                   └──  Computer (base.html) ──► Bluetooth ──► micro:bit
+ Remote control (drive.html) ──── commands ────  Phone on stand (phone.html) ──► Bluetooth ──► micro:bit
+            │                                                                    (or)
+            └──── commands ────  Computer (base.html) ──► Bluetooth ──► micro:bit
 ```
 
 **Either the phone or the computer can hold the Bluetooth link to the micro:bit.** The phone
@@ -15,15 +15,14 @@ Chrome on Android, or an app like [Bluefy](https://apps.apple.com/app/bluefy-web
 on iPhone, since iPhone Safari can't do Bluetooth. The phone page shows a **🔵 Connect stand**
 button when its browser can.
 
-- Video, audio and commands travel **directly between devices** over WebRTC.
-- The free PeerJS cloud server is used only to introduce the devices to each other
-  (signalling). No video passes through it.
-- All three devices join the same **room name**.
+- Commands travel **directly between devices** over WebRTC.
+- The free PeerJS cloud server is used only to introduce the devices to each other (signalling).
+- All the devices join the same **room name**.
 
 ## 1. Host the site (HTTPS is required)
 
-Browsers only allow camera and mic on HTTPS pages, so the phone and the remote person
-need a hosted copy. Any static host works, for example:
+Browsers only allow Bluetooth and keeping the screen awake on HTTPS pages, so the phone and the
+remote control need a hosted copy. Any static host works, for example:
 
 - **Netlify Drop**: drag this folder onto https://app.netlify.com/drop
 - **GitHub Pages**: push the folder to a repo, then turn on Pages in Settings
@@ -97,44 +96,25 @@ python3 keys.py                 # then open http://localhost:8765/base.html?room
 
 ## 3. Phone on the stand
 
-Open **https://your-site/phone.html?room=YOURROOM**, tap **Start**, and allow the camera and mic.
-The screen stays awake while the page is open. The phone shows the remote person full-screen
-and sends its front camera back to them.
+Open **https://your-site/phone.html?room=YOURROOM** and tap **Start**. The phone never uses its camera
+or mic. The screen stays awake and goes black apart from the small status chips at the top.
 
 Once the phone is connected to the stand, **🎲 Auto** makes it move and change colour by itself, with
 no driver or computer needed: every 1–10 s it either lights red, green or blue and goes forward then back
 (0.5–2 s each way), or turns left, right for twice as long, then left again. A driver steering switches it off.
 
-## 4. Remote person
+## 4. Remote control
 
 Open **https://your-site/drive.html?room=YOURROOM** and click **Start**. To move the stand,
 hold ▲ ▼ ◀ ▶ or the spin buttons ↺ ↻ (or use the arrow keys). The **Music**, **Car lights**, **RGB lights** and
 **Mode** tabs have the rest of the Mbit app's buttons. The status chips show whether the phone, the computer and
 the stand are ready.
 
-## How drivers appear on the phone
-
-Before starting, each driver chooses a look (and can switch during the call from the menu under the video):
-
-| Look | What the phone shows | Camera permission? |
-|---|---|---|
-| 📷 Camera | Their camera | Yes |
-| 🙂 Animated face | A Lego head that copies their expressions (independent eyebrows, smiles, frowns, pursed lips, puffed cheeks, winks) and head movement. It learns their resting face in the first second; **😐 Reset face** relearns it | Yes, but the camera is only used on their device for face tracking (MediaPipe) and never sent |
-| 🖼️ Picture | A picture they choose (remembered in that browser) | No |
-| 🔤 Name only | Their name and initials | No |
-
-The microphone is optional too ("Use my microphone" on the start screen).
-
 ## Several drivers at once
 
-Up to **4** people can open `drive.html` in the same room at the same time:
-
-- The phone shows everyone in a split-screen grid, labelled with the names they typed. The phone's
-  upload is shared between them.
-- Everyone sees the phone's camera and can steer. **The most recent button press wins**: if someone
-  presses while another person is holding, they take over. When they let go, the first person's
-  hold carries on. Each driver's status shows who is steering.
-- A fifth driver sees "Phone: full" and joins automatically when a spot opens.
+Several people can open `drive.html` in the same room at the same time, and all of them can steer.
+**The most recent button press wins**: if someone presses while another person is holding, they take
+over. When they let go, the first person's hold carries on. Each driver's status shows who is steering.
 
 ## Safety
 
@@ -160,11 +140,11 @@ control.onEvent(9010, EventBusValue.MICROBIT_EVT_ANY, function () {
 
 ## Connecting across different networks (relay)
 
-When everyone is on the same Wi-Fi, devices connect directly. When the remote person is somewhere
-else (their home, mobile data), many routers and mobile networks block direct connections and the
-video never starts. The drive page then shows **"Phone: blocked between networks — needs a relay"**.
+When everyone is on the same Wi-Fi, devices connect directly. When the remote control is somewhere
+else (another house, mobile data), many routers and mobile networks block direct connections and the
+controls never connect. The drive page then shows **"Phone: blocked between networks — needs a relay"**.
 
-A TURN relay fixes this by passing the video through a server when a direct route isn't possible
+A TURN relay fixes this by passing the commands through a server when a direct route isn't possible
 (direct connections are still used whenever they work). To set one up (free, 20 GB/month):
 
 1. Sign up at https://www.metered.ca/stun-turn and create a TURN app.
@@ -178,6 +158,6 @@ or delete and recreate the key in Metered if it's abused.
 
 ## Limitations
 
-- Without a relay (see above), the video only works when direct connections are possible.
-  Some strict corporate or school networks block the video even with a relay.
+- Without a relay (see above), the remote control only works when direct connections are possible.
+  Some strict corporate or school networks block it even with a relay. 🎲 Auto needs no connection at all.
 - The computer needs Chrome or Edge (Web Bluetooth). Safari and Firefox can't talk to the micro:bit.

@@ -7,18 +7,7 @@
 <title>Presence · Phone</title>
 <link rel="stylesheet" href="style.css">
 <style>
-  #grid { position: fixed; inset: 0; display: grid; gap: 2px; background: #000; }
-  .tile { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
-  .tile video { width: 100%; height: 100%; object-fit: cover; }
-  .tile .name {
-    position: absolute; left: 10px; bottom: 10px; padding: 2px 10px; border-radius: 99px;
-    background: rgba(0,0,0,.55); font-size: 0.9rem;
-  }
-  .tile .name:empty { display: none; }
-  #self {
-    position: fixed; right: 12px; bottom: 12px; width: 22vw; max-width: 140px;
-    border-radius: 10px; border: 2px solid rgba(255,255,255,.4); transform: scaleX(-1);
-  }
+  body { background: #000; }
   #idle { position: fixed; inset: 0; }
   .top { position: fixed; top: max(12px, env(safe-area-inset-top)); left: 12px; right: 12px; }
 </style>
@@ -33,13 +22,10 @@
 </form>
 
 <div id="app">
-  <div id="grid"></div>
-  <video id="self" autoplay playsinline muted hidden></video>
-
   <div id="idle" class="center">
     <div class="card">
       <h1>📱 Phone · <span data-room></span></h1>
-      <p id="idle-text">Tap start to turn on the camera and wait for the remote person.</p>
+      <p>Tap start to keep the screen on and let drivers connect.</p>
       <button id="start" class="primary">Start</button>
       <p class="note" id="bt-note" hidden style="color:var(--muted);font-size:0.85rem;margin:14px 0 0"></p>
     </div>
@@ -47,7 +33,7 @@
 
   <div class="top chips">
     <span class="chip" id="sig">Offline</span>
-    <span class="chip" id="call">No call</span>
+    <span class="chip" id="drivers">No drivers</span>
     <span class="chip" id="stand" hidden>Stand</span>
     <button id="bt" class="chip" hidden>🔵 Connect stand</button>
     <button id="auto" class="chip" hidden>🎲 Auto: off</button>
@@ -60,135 +46,21 @@
 <script src="stand.js"></script>
 <script>
 const room = getRoomOrShowForm();
-const grid = document.getElementById('grid');
-const selfVideo = document.getElementById('self');
-const idle = document.getElementById('idle');
-const idleText = document.getElementById('idle-text');
-let localStream = null;
-const MAX_DRIVERS = 4;
-const TOTAL_BITRATE = 1_200_000; // shared between drivers so the phone's upload doesn't choke
-const calls = new Map();         // driver peer id → { call, tile, setBitrate, live }
-const diagConns = new Map();     // driver peer id → data connection
-const driverNames = new Map();   // driver peer id → name
-const turnedAway = new Map();    // driver peer id → time we last refused them (phone full)
-
-function showIdle(text) {
-  idle.hidden = false;
-  idleText.textContent = text;
-  document.getElementById('start').hidden = true;
-}
+const drivers = new Map();     // driver peer id → { conn, name, seen }
+const driverNames = new Map([[StandAuto.ID, '🎲 Auto']]);
+const DRIVER_TIMEOUT_MS = 4000; // drivers ping every second; closing a tab can take PeerJS ~30s to notice
 
 document.getElementById('start').addEventListener('click', async () => {
-  try {
-    localStream = await getCameraAndMic('motion'); // the stand turns, so this camera moves
-  } catch (err) {
-    idleText.textContent = `Camera/mic blocked: ${err.message}. Allow access and reload.`;
-    return;
-  }
-  selfVideo.srcObject = localStream;
-  selfVideo.hidden = false;
+  document.getElementById('idle').hidden = true;
   keepAwake();
   document.documentElement.requestFullscreen?.().catch(() => {});
-  showIdle('Waiting for the remote person to call…');
   await iceReady;
-  connect();
-});
-
-function connect() {
   makeFixedPeer(peerIds(room).phone, (t, st) => setChip('sig', t, st), (peer) => {
     setChip('sig', 'Connecting…', 'wait');
     peer.on('open', () => setChip('sig', 'Online', 'ok'));
-    peer.on('call', onCall);
-    peer.on('connection', onDiagConnection);
+    peer.on('connection', onDriverConnection);
   });
-}
-
-function onCall(call) {
-  const id = call.peer;
-  const name = String(call.metadata?.name || '').slice(0, 30);
-  diag.log(`incoming call from ${name || id.slice(0, 8)} (${calls.size} already)`);
-
-  // The same driver redialling replaces its own old call; anyone else joins the grid.
-  const previous = calls.get(id);
-  if (!previous && calls.size >= MAX_DRIVERS) {
-    diag.log('phone full, turning caller away');
-    turnedAway.set(id, Date.now());
-    diagConns.get(id)?.send({ type: 'full', max: MAX_DRIVERS });
-    call.close();
-    return;
-  }
-  turnedAway.delete(id);
-  if (previous) {
-    calls.delete(id);
-    previous.call.close();
-  }
-
-  const tile = previous?.tile || makeTile();
-  tile.querySelector('.name').textContent = name;
-  driverNames.set(id, name);
-  const entry = { call, tile, live: false, setBitrate: null };
-  calls.set(id, entry);
-
-  call.answer(localStream);
-  entry.setBitrate = tuneVideo(call, TOTAL_BITRATE);
-  logConnection(call.peerConnection, `call[${name || id.slice(0, 8)}]`);
-  layout();
-
-  onCallConnected(call, (stream) => {
-    if (calls.get(id) !== entry) return;
-    entry.live = true;
-    const video = tile.querySelector('video');
-    video.srcObject = stream;
-    video.play().catch(() => {});
-    layout();
-  });
-
-  const end = (why) => {
-    if (calls.get(id) !== entry) return;
-    diag.log(`call from ${name || id.slice(0, 8)} ended (${why})`);
-    calls.delete(id);
-    tile.remove();
-    layout();
-  };
-  call.on('close', () => end('closed'));
-  call.on('error', (err) => end(`error ${err.type}`));
-  // PeerJS doesn't always fire 'close' when the other side vanishes; watch ICE too.
-  watchIce(call, () => { end('connection lost'); call.close(); });
-}
-
-function makeTile() {
-  const tile = document.createElement('div');
-  tile.className = 'tile';
-  tile.innerHTML = '<video autoplay playsinline></video><span class="name"></span>';
-  grid.append(tile);
-  return tile;
-}
-
-// Splits the screen between everyone connected, and shares the upload between them.
-function layout() {
-  const n = grid.children.length;
-  const live = [...calls.values()].filter((c) => c.live).length;
-  if (n) {
-    const landscape = innerWidth >= innerHeight;
-    const cols = landscape ? Math.ceil(Math.sqrt(n)) : Math.ceil(n / Math.ceil(Math.sqrt(n)));
-    const rows = Math.ceil(n / cols);
-    grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
-    grid.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
-  }
-  const each = Math.max(300_000, Math.round(TOTAL_BITRATE / Math.max(1, calls.size)));
-  calls.forEach((c) => c.setBitrate?.(each));
-
-  if (live) {
-    idle.hidden = true;
-    setChip('call', live === 1 ? 'In call' : `In call · ${live} drivers`, 'ok');
-  } else if (calls.size) {
-    setChip('call', 'Connecting…', 'wait');
-  } else {
-    setChip('call', 'No call', 'bad');
-    if (localStream) showIdle('Waiting for the remote person to call…');
-  }
-}
-addEventListener('resize', layout);
+});
 
 // ---- Driving the stand from this phone -------------------------------------
 // Only possible where the browser has Web Bluetooth: Chrome on Android, or an app like
@@ -239,7 +111,6 @@ const auto = new StandAuto({
     broadcastStand();
   },
 });
-driverNames.set(StandAuto.ID, '🎲 Auto');
 
 function showAuto() {
   const btn = document.getElementById('auto');
@@ -277,49 +148,69 @@ function broadcastStand() {
     from: 'phone',
     ready: link.ready,
     text: link.text,
+    drivers: drivers.size,
     controller: stand.controller ? driverNames.get(stand.controller) || 'someone' : null,
     controllerId: stand.controller,
     switches: taps.on,
     auto: auto.on,
   };
-  diagConns.forEach((conn) => conn.open && conn.send(msg));
+  drivers.forEach(({ conn }) => conn.open && conn.send(msg));
+  setChip('drivers', drivers.size ? `${drivers.size} driver${drivers.size > 1 ? 's' : ''}` : 'No drivers',
+    drivers.size ? 'ok' : '');
 }
 
-// The drive page opens one data connection for diagnostics, driving commands and status.
-function onDiagConnection(conn) {
-  if (conn.metadata?.kind !== 'diag') return conn.close();
+// ---- Remote drivers --------------------------------------------------------
+// Each drive page opens one data connection for driving commands, status and diagnostics.
+
+function onDriverConnection(conn) {
+  if (conn.metadata?.kind !== 'driver') return conn.close();
+  const id = conn.peer;
   const push = (line) => conn.open && conn.send({ type: 'diag', line });
   const cleanup = () => {
     diag.listeners.delete(push);
-    stand.stop(conn.peer); // don't leave the stand turning if they vanish mid-press
-    piano.stop(conn.peer);
-    if (diagConns.get(conn.peer) === conn) diagConns.delete(conn.peer);
-    if (!diagConns.size) taps.turnOff('mode'); // nobody is watching it drive itself
+    if (drivers.get(id)?.conn !== conn) return;
+    diag.log(`${driverNames.get(id) || 'a driver'} left`);
+    stand.stop(id); // don't leave the stand moving if they vanish mid-press
+    piano.stop(id);
+    drivers.delete(id);
+    if (!drivers.size) taps.turnOff('mode'); // nobody is watching it drive itself
+    broadcastStand();
   };
   conn.on('data', (msg) => {
-    if (diagConns.get(conn.peer) !== conn) return;
+    const d = drivers.get(id);
+    if (d?.conn !== conn) return;
+    d.seen = Date.now();
     if (msg?.type === 'move') {
       if (auto.on && msg.press !== false) auto.set(false); // a driver steering takes over from Auto
-      stand.move(conn.peer, msg.dir, msg.press !== false);
-    } else if (msg?.type === 'stop') stand.stop(conn.peer);
-    else if (msg?.type === 'note') piano.move(conn.peer, msg.key, msg.press !== false);
-    else if (msg?.type === 'note-stop') piano.stop(conn.peer);
+      stand.move(id, msg.dir, msg.press !== false);
+    } else if (msg?.type === 'stop') stand.stop(id);
+    else if (msg?.type === 'note') piano.move(id, msg.key, msg.press !== false);
+    else if (msg?.type === 'note-stop') piano.stop(id);
     else if (msg?.type === 'tap') taps.tap(msg.key);
   });
   conn.on('open', () => {
-    diagConns.get(conn.peer)?.close();
-    diagConns.set(conn.peer, conn);
+    // The same driver reconnecting replaces its old link; anyone else is added.
+    const old = drivers.get(id);
+    driverNames.set(id, String(conn.metadata?.name || '').slice(0, 30));
+    drivers.set(id, { conn, seen: Date.now() });
+    old?.conn.close();
+    diag.log(`${driverNames.get(id) || 'a driver'} connected`);
     conn.send({ type: 'diag-all', lines: diag.lines });
-    broadcastStand();
-    // Their log link can open after we refused the call, so tell them now.
-    if (Date.now() - (turnedAway.get(conn.peer) || 0) < 30000 && !calls.has(conn.peer)) {
-      conn.send({ type: 'full', max: MAX_DRIVERS });
-    }
     diag.listeners.add(push);
+    broadcastStand();
   });
   conn.on('close', cleanup);
   conn.on('error', cleanup);
 }
+
+setInterval(() => {
+  drivers.forEach((d, id) => {
+    if (Date.now() - d.seen > DRIVER_TIMEOUT_MS) {
+      diag.log(`${driverNames.get(id) || 'a driver'} stopped responding`);
+      d.conn.close();
+    }
+  });
+}, 1000);
 </script>
 </body>
 </html>

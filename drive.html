@@ -6,40 +6,20 @@
 <title>Presence · Drive</title>
 <link rel="stylesheet" href="style.css">
 <style>
-  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
-  .stage { position: relative; flex: 1; min-height: 0; background: #000; }
-  #remote { width: 100%; height: 100%; object-fit: contain; }
-  #self {
-    position: absolute; right: 12px; bottom: 12px; width: 24vw; max-width: 200px;
-    border-radius: 10px; border: 2px solid rgba(255,255,255,.4);
-  }
-  #self.mirror { transform: scaleX(-1); }
-  .looks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0 8px; text-align: left; }
-  .looks label {
-    display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer;
-    border: 1px solid var(--line); border-radius: 10px;
-  }
-  .looks label:has(input:checked) { border-color: var(--accent); background: rgba(255, 207, 46, .08); }
-  .looks input { accent-color: var(--accent); }
-  #look-note { font-size: 0.85rem; min-height: 2.8em; margin-bottom: 8px; }
-  #picture-thumb { width: 72px; height: 72px; object-fit: cover; border-radius: 10px; border: 1px solid var(--line); }
-  .mic-row { justify-content: center; margin-bottom: 14px; color: var(--muted); font-size: 0.9rem; }
-  #notice { color: var(--wait); }
-  .stage .chips { position: absolute; top: 12px; left: 12px; right: 12px; }
-  #start-panel, #reconnecting { position: absolute; inset: 0; }
-  #reconnecting { pointer-events: none; background: rgba(0,0,0,.35); }
+  #app { min-height: 100%; display: flex; flex-direction: column; }
+  .top { padding: 12px 16px 0; }
+  #start-panel { flex: 1; min-height: 0; }
+  #name { width: 100%; margin-bottom: 14px; }
 
   .controls {
-    display: flex; align-items: flex-start; justify-content: center; gap: 12px 20px;
-    padding: 12px 16px max(12px, env(safe-area-inset-bottom));
-    background: var(--panel); border-top: 1px solid var(--line); flex-wrap: wrap;
-    max-height: 55vh; overflow-y: auto;
+    flex: 1; display: flex; align-items: flex-start; align-content: center; justify-content: center;
+    gap: 16px 24px; flex-wrap: wrap; padding: 16px 16px max(16px, env(safe-area-inset-bottom));
   }
   [data-hold] { touch-action: none; user-select: none; -webkit-user-select: none; }
   .controls [data-hold].active { background: var(--accent); color: #111; border-color: var(--accent); }
   [data-hold]:disabled, [data-tap]:disabled { opacity: 0.4; cursor: not-allowed; }
-  .pad { display: grid; grid-template-columns: repeat(3, 64px); grid-auto-rows: 52px; gap: 6px; }
-  .pad button { padding: 0; font-size: 1.6rem; border-radius: 14px; }
+  .pad { display: grid; grid-template-columns: repeat(3, 76px); grid-auto-rows: 64px; gap: 8px; }
+  .pad button { padding: 0; font-size: 1.8rem; border-radius: 16px; }
 
   .extras { flex: 1 1 300px; max-width: 520px; display: grid; gap: 8px; }
   .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
@@ -59,7 +39,6 @@
   }
   .piano .black { grid-row: 1; z-index: 1; margin: 0 22%; background: #0b0d10; border-color: #000; border-radius: 0 0 6px 6px; }
 
-  .misc { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: center; max-width: 340px; }
   dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 14px; width: min(900px, calc(100vw - 32px)); }
   dialog::backdrop { background: rgba(0,0,0,.6); }
   #diag-text { width: 100%; height: 55vh; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; font: 11px/1.4 ui-monospace, Menlo, monospace; }
@@ -76,41 +55,24 @@
 </form>
 
 <div id="app">
-  <div class="stage">
-    <video id="remote" autoplay playsinline></video>
-    <video id="self" autoplay playsinline muted hidden></video>
-    <div class="chips">
-      <span class="chip" id="sig">Offline</span>
-      <span class="chip" id="phone">Phone</span>
-      <span class="chip" id="base">Computer</span>
-      <span class="chip" id="stand">Stand</span>
-      <span class="chip" id="stats" hidden></span>
-    </div>
-    <div id="reconnecting" class="center" hidden><div class="card"><p style="margin:0">Video dropped — reconnecting…</p></div></div>
-    <div id="start-panel" class="center">
-      <div class="card">
-        <h1>🕹️ Drive · <span data-room></span></h1>
-        <p id="start-text">Choose how you appear on the phone, then start.</p>
-        <input id="name" placeholder="Your name (optional)" maxlength="30" autocomplete="name" style="width:100%">
-        <div class="looks" role="radiogroup" aria-label="How you appear on the phone">
-          <label><input type="radio" name="look" value="camera" checked> 📷 Camera</label>
-          <label><input type="radio" name="look" value="avatar"> 🙂 Animated face</label>
-          <label><input type="radio" name="look" value="picture"> 🖼️ Picture</label>
-          <label><input type="radio" name="look" value="name"> 🔤 Name only</label>
-        </div>
-        <p id="look-note"></p>
-        <div class="row" id="picture-row" style="justify-content:center;margin-bottom:12px" hidden>
-          <img id="picture-thumb" alt="Your picture" hidden>
-          <button id="choose-picture" type="button">Choose picture…</button>
-        </div>
-        <label class="row mic-row"><input type="checkbox" id="use-mic" checked> 🎤 Use my microphone</label>
-        <button id="start" class="primary">Start</button>
-      </div>
+  <div class="top chips">
+    <span class="chip" id="sig">Offline</span>
+    <span class="chip" id="phone">Phone</span>
+    <span class="chip" id="base">Computer</span>
+    <span class="chip" id="stand">Stand</span>
+  </div>
+
+  <div id="start-panel" class="center">
+    <div class="card">
+      <h1>🕹️ Drive · <span data-room></span></h1>
+      <p>Your name shows when you're steering.</p>
+      <input id="name" placeholder="Your name (optional)" maxlength="30" autocomplete="name">
+      <button id="start" class="primary">Start</button>
     </div>
   </div>
 
   <!-- Every button in the Mbit app: the drive pad, then its Music / Car lights / RGB lights / Mode tabs. -->
-  <div class="controls">
+  <div class="controls" hidden>
     <div class="pad">
       <button data-hold="move" data-key="spinLeft" disabled aria-label="Spin left">↺</button>
       <button data-hold="move" data-key="forward" disabled aria-label="Forward">▲</button>
@@ -165,26 +127,13 @@
       </div>
     </div>
 
-    <div class="misc">
-      <button id="mic" aria-pressed="false" disabled>🎤 Mute</button>
-      <select id="look-switch" disabled aria-label="How you appear on the phone">
-        <option value="camera">📷 Camera</option>
-        <option value="avatar">🙂 Animated face</option>
-        <option value="picture">🖼️ Picture</option>
-        <option value="name">🔤 Name only</option>
-      </select>
-      <button id="change-picture" hidden>🖼️ Change picture</button>
-      <button id="reset-face" hidden title="Relearn your neutral face">😐 Reset face</button>
-      <button id="diag-open">🩺 Diagnostics</button>
-    </div>
-    <div class="hint">Hold a button (or the arrow keys) to move the stand. <span id="notice"></span></div>
-    <input type="file" id="picture-file" accept="image/*" hidden>
+    <div class="hint">Hold a button (or the arrow keys) to move the stand. <button id="diag-open">🩺 Diagnostics</button></div>
   </div>
 </div>
 
 <dialog id="diag-dialog">
-  <p style="margin-top:0">If the video drops, open this <strong>right after</strong> it happens, copy, and send it over.
-  It includes this computer's log and the phone's log.</p>
+  <p style="margin-top:0">If the controls stop working, open this <strong>right after</strong> it happens, copy, and send it over.
+  It includes this device's log and the phone's log.</p>
   <textarea id="diag-text" readonly></textarea>
   <div class="row" style="justify-content:flex-end;margin-top:8px">
     <button id="diag-copy" class="primary">Copy</button>
@@ -195,188 +144,38 @@
 <script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="config.js"></script>
 <script src="common.js"></script>
-<script src="looks.js"></script>
 <script>
 const room = getRoomOrShowForm();
 const ids = room && peerIds(room);
-const remoteVideo = document.getElementById('remote');
-const selfVideo = document.getElementById('self');
 const standButtons = [...document.querySelectorAll('[data-hold], [data-tap]')];
 
 const PENDING_TIMEOUT = 15000; // relayed connections can take several seconds to come up
 const RETRY_EVERY = 3000;
-const HOLD_REPEAT = 150; // base stops the motor if it hears nothing for ~500ms
+const HOLD_REPEAT = 150; // the stand stops if it hears nothing for ~500ms
 
 let peer = null;
-const outgoing = new MediaStream(); // what we send: the current look's video + the mic
-let look = null;
-let micTrack = null;
-let call = null, callStarted = 0, callLive = false;
-let conn = null, connStarted = 0;
-let diagConn = null, diagStarted = 0;
+let phoneConn = null, phoneStarted = 0;
+let baseConn = null, baseStarted = 0;
 let phoneLog = [];
 let hasRelay = false;
-let phoneFull = false;
-const nameInput = document.getElementById('name');
-try { nameInput.value = localStorage.getItem('presence.name') || ''; } catch {}
-const myName = () => nameInput.value.trim().slice(0, 30);
-let phoneFailures = 0; // call attempts in a row that never got video
+let phoneFailures = 0; // connection attempts in a row that never opened
 let phoneOffline = false;
-
-// ---- Looks (camera / animated face / picture / name) ---------------------------
+let baseOffline = false;
 
 const $ = (id) => document.getElementById(id);
 const store = {
   get(k) { try { return localStorage.getItem(`presence.${k}`); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(`presence.${k}`, v); } catch { /* full or blocked */ } },
 };
-const LOOK_NOTES = {
-  camera: 'The phone shows your camera.',
-  avatar: 'A Lego head copies your face. Your camera only tracks your face on this device — the phone never sees it.',
-  picture: 'The phone shows a picture you choose. Your camera stays off.',
-  name: 'The phone shows your name. Your camera stays off.',
-};
-const lookSwitch = $('look-switch');
-const pictureInput = $('picture-file');
-let picture = store.get('picture');
-let pickingFor = 'start'; // or 'switch' when changing picture during a call
-let noticeTimer = null;
+const nameInput = $('name');
+nameInput.value = store.get('name') || '';
+const myName = () => nameInput.value.trim().slice(0, 30);
 
-const chosenLook = () => document.querySelector('input[name=look]:checked').value;
-
-function notice(text) {
-  $('notice').textContent = text;
-  clearTimeout(noticeTimer);
-  noticeTimer = setTimeout(() => ($('notice').textContent = ''), 10000);
-}
-
-function updateLookNote() {
-  const kind = chosenLook();
-  $('look-note').textContent = LOOK_NOTES[kind];
-  $('picture-row').hidden = kind !== 'picture';
-  $('picture-thumb').hidden = !picture;
-  if (picture) $('picture-thumb').src = picture;
-  $('choose-picture').textContent = picture ? 'Change…' : 'Choose picture…';
-}
-
-const savedLook = store.get('look');
-if (savedLook && (savedLook !== 'picture' || picture)) {
-  const radio = document.querySelector(`input[name=look][value="${savedLook}"]`);
-  if (radio) radio.checked = true;
-}
-updateLookNote();
-document.querySelectorAll('input[name=look]').forEach((r) => r.addEventListener('change', () => {
-  updateLookNote();
-  if (chosenLook() === 'picture' && !picture) choosePicture('start');
-}));
-$('choose-picture').addEventListener('click', () => choosePicture('start'));
-$('change-picture').addEventListener('click', () => choosePicture('switch'));
-
-function choosePicture(purpose) {
-  pickingFor = purpose;
-  pictureInput.value = '';
-  pictureInput.click();
-}
-
-pictureInput.addEventListener('change', async () => {
-  const file = pictureInput.files[0];
-  if (!file) return;
-  try {
-    picture = await pictureFromFile(file);
-  } catch (err) {
-    return notice(`Couldn't read that picture (${err.message}).`);
-  }
-  store.set('picture', picture);
-  updateLookNote();
-  if (pickingFor === 'switch') switchLook('picture');
-});
-
-// Swaps what we send, including on a call that's already running.
-async function setLook(kind) {
-  const next = await buildLook(kind, { name: myName(), picture });
-  const old = look;
-  look = next;
-  outgoing.getVideoTracks().forEach((t) => outgoing.removeTrack(t));
-  outgoing.addTrack(next.track);
-  const sender = call?.peerConnection?.getTransceivers()
-    .find((t) => t.receiver.track?.kind === 'video')?.sender;
-  if (sender) await sender.replaceTrack(next.track);
-  selfVideo.srcObject = new MediaStream([next.track]);
-  selfVideo.classList.toggle('mirror', next.mirror);
-  selfVideo.hidden = false;
-  lookSwitch.value = kind;
-  $('change-picture').hidden = kind !== 'picture';
-  $('reset-face').hidden = kind !== 'avatar';
-  if (kind === 'avatar') notice('Keep a relaxed face for a second so the head learns your neutral look.');
-  old?.stop();
-  store.set('look', kind);
-  diag.log(`look: ${kind}`);
-}
-
-async function switchLook(kind) {
-  if (kind === 'picture' && !picture) {
-    lookSwitch.value = look.kind;
-    return choosePicture('switch');
-  }
-  lookSwitch.disabled = true;
-  if (kind === 'avatar') notice('Loading face tracking…');
-  try {
-    await setLook(kind);
-    if (kind !== 'avatar') notice('');
-  } catch (err) {
-    lookSwitch.value = look.kind;
-    notice(`Couldn't switch: ${err.message}`);
-  } finally {
-    lookSwitch.disabled = false;
-  }
-}
-lookSwitch.addEventListener('change', () => switchLook(lookSwitch.value));
-$('reset-face').addEventListener('click', () => {
-  look?.recalibrate?.();
-  notice('Relaxed face, please… learning your neutral look.');
-});
-
-document.getElementById('start').addEventListener('click', async () => {
-  const kind = chosenLook();
-  if (kind === 'picture' && !picture) return choosePicture('start');
-  const startBtn = $('start');
-  startBtn.disabled = true;
-  $('start-text').textContent = kind === 'avatar' ? 'Loading face tracking…' : 'Starting…';
-  const needsCamera = kind === 'camera' || kind === 'avatar';
-  const problems = [];
-
-  if ($('use-mic').checked) {
-    try {
-      // Asking for the camera at the same time gives one permission prompt instead of two.
-      const s = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS, video: needsCamera });
-      s.getVideoTracks().forEach((t) => t.stop());
-      micTrack = s.getAudioTracks()[0];
-    } catch {
-      try {
-        micTrack = (await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS })).getAudioTracks()[0];
-      } catch (err) {
-        problems.push(`microphone blocked (${err.message}), joining without sound`);
-      }
-    }
-    if (micTrack) outgoing.addTrack(micTrack);
-  }
-
-  try {
-    await setLook(kind);
-  } catch (err) {
-    problems.push(`${kind === 'avatar' ? 'animated face' : kind} unavailable (${err.message}), showing your name instead`);
-    await setLook('name');
-  }
-  if (problems.length) notice(`Note: ${problems.join('; ')}.`);
-
+$('start').addEventListener('click', async () => {
+  store.set('name', myName());
   $('start-panel').hidden = true;
-  lookSwitch.disabled = false;
-  const mic = $('mic');
-  mic.disabled = !micTrack;
-  if (!micTrack) mic.textContent = '🎤 Off';
+  document.querySelector('.controls').hidden = false;
   keepAwake();
-
-  try { localStorage.setItem('presence.name', myName()); } catch {}
   hasRelay = await iceReady;
   peer = makePeer(null, (t, s) => setChip('sig', t, s));
   setChip('sig', 'Connecting…', 'wait');
@@ -386,15 +185,21 @@ document.getElementById('start').addEventListener('click', async () => {
     setInterval(tick, RETRY_EVERY);
   });
   peer.on('error', (err) => {
-    // "peer-unavailable" just means that device isn't online yet; tick() retries.
+    // "peer-unavailable" just means that page isn't open yet; tick() keeps retrying.
     if (err.type !== 'peer-unavailable') return console.warn(err);
-    if (err.message.includes(ids.phone) && call && !callLive) {
-      const stale = call;
-      call = null;
+    if (err.message.includes(ids.phone) && phoneConn && !phoneConn.open) {
+      const stale = phoneConn;
+      phoneConn = null;
       stale.close();
       phoneFailures = 0; // not a network problem: the phone page just isn't open
       phoneOffline = true;
       setChip('phone', 'Phone: not online (open phone.html and tap Start)', 'bad');
+    } else if (err.message.includes(ids.base) && baseConn && !baseConn.open) {
+      const stale = baseConn;
+      baseConn = null;
+      stale.close();
+      baseOffline = true;
+      setChip('base', 'Computer: not in use', '');
     }
   });
 });
@@ -404,66 +209,89 @@ function tick() {
   if (!peer || peer.disconnected) return;
   const now = Date.now();
 
-  if (call && !callLive && now - callStarted > PENDING_TIMEOUT) {
-    diag.log('call attempt timed out without video');
-    const stale = call;
-    call = null;
+  if (phoneConn && !phoneConn.open && now - phoneStarted > PENDING_TIMEOUT) {
+    diag.log('phone link timed out without connecting');
+    const stale = phoneConn;
+    phoneConn = null;
     stale.close();
     phoneOffline = false; // it answered the signalling server, so it is online
-    if (!phoneFull) phoneFailures++; // when full, tick() keeps retrying in case a spot opens
+    phoneFailures++;
   }
-  if (!call) dialPhone();
+  if (!phoneConn) dialPhone();
 
-  if (conn && !conn.open && now - connStarted > PENDING_TIMEOUT) { conn.close(); conn = null; }
-  if (!conn) dialBase();
-
-  if (diagConn && !diagConn.open && now - diagStarted > PENDING_TIMEOUT) { diagConn.close(); diagConn = null; }
-  if (!diagConn) dialPhoneDiag();
+  if (baseConn && !baseConn.open && now - baseStarted > PENDING_TIMEOUT) {
+    const stale = baseConn;
+    baseConn = null;
+    stale.close();
+  }
+  if (!baseConn) dialBase();
 }
 
 function dialPhone() {
-  if (phoneOffline || phoneFull) {
+  if (phoneOffline) {
     // keep the "not online" message while we keep trying
   } else if (phoneFailures < 2) {
-    setChip('phone', 'Phone: calling…', 'wait');
+    setChip('phone', 'Phone: connecting…', 'wait');
   } else {
     setChip('phone', hasRelay
       ? 'Phone: can\'t connect (see Diagnostics)'
       : 'Phone: blocked between networks — needs a relay (see README)', 'bad');
   }
-  const c = peer.call(ids.phone, outgoing, { metadata: { name: myName() } });
-  call = c; callStarted = Date.now(); callLive = false;
-  tuneVideo(c, 800_000);
-  logConnection(c.peerConnection, 'call');
-  diag.log('calling phone');
-  onCallConnected(c, (stream) => {
-    if (c !== call) return;
-    callLive = true;
-    phoneFailures = 0;
-    phoneFull = false;
-    phoneOffline = false;
-    $reconnecting.hidden = true;
-    remoteVideo.srcObject = stream;
-    startStats(c);
-    remoteVideo.play().catch(() => {});
-    setChip('phone', 'Phone: live', 'ok');
+  const c = peer.connect(ids.phone, { reliable: true, metadata: { kind: 'driver', name: myName() } });
+  phoneConn = c; phoneStarted = Date.now();
+  if (c.peerConnection) logConnection(c.peerConnection, 'phone link');
+  c.on('data', (msg) => {
+    if (msg?.type === 'stand') return showStand('phone', msg);
+    if (msg?.type === 'diag-all') phoneLog = msg.lines.slice();
+    else if (msg?.type === 'diag') { phoneLog.push(msg.line); if (phoneLog.length > 600) phoneLog.shift(); }
   });
-  const end = (why) => {
-    if (c !== call) return;
-    diag.log(`call ended (${why})`);
-    const wasLive = callLive;
-    call = null; callLive = false;
-    stopStats();
-    if (!wasLive && !phoneOffline && !phoneFull) phoneFailures++;
-    // Keep the last frame on screen and redial straight away rather than going black.
-    $reconnecting.hidden = !wasLive;
-    if (phoneFull || phoneOffline) return; // tick() retries on its normal schedule
-    if (phoneFailures < 2) setChip('phone', 'Phone: reconnecting…', 'bad');
-    setTimeout(tick, 500);
+  c.on('open', () => {
+    if (c !== phoneConn) return;
+    phoneFailures = 0;
+    phoneOffline = false;
+    setChip('phone', 'Phone: connected', 'ok');
+    updateButtons();
+    const beat = setInterval(() => (c.open ? c.send({ type: 'ping' }) : clearInterval(beat)), 1000);
+  });
+  const end = () => {
+    if (c !== phoneConn) return;
+    diag.log('phone link closed');
+    phoneConn = null;
+    standStatus.phone = null;
+    updateButtons();
+    if (!canDrive()) release();
+    setChip('phone', 'Phone: reconnecting…', 'bad');
+    showStand('phone', null);
   };
-  c.on('close', () => end('closed'));
-  c.on('error', (err) => end(`error ${err.type}`));
-  watchIce(c, () => { end('connection lost'); c.close(); });
+  c.on('close', end);
+  c.on('error', end);
+}
+
+function dialBase() {
+  if (!baseOffline) setChip('base', 'Computer: connecting…', 'wait');
+  const c = peer.connect(ids.base, { reliable: true, metadata: { name: myName() } });
+  baseConn = c; baseStarted = Date.now();
+  c.on('open', () => {
+    if (c !== baseConn) return;
+    baseOffline = false;
+    setChip('base', 'Computer: connected', 'ok');
+    updateButtons();
+    const beat = setInterval(() => (c.open ? c.send({ type: 'ping' }) : clearInterval(beat)), 1000);
+  });
+  c.on('data', (msg) => {
+    if (msg?.type === 'status') showStand('base', msg);
+  });
+  const end = () => {
+    if (c !== baseConn) return;
+    baseConn = null;
+    standStatus.base = null;
+    updateButtons();
+    if (!canDrive()) release();
+    setChip('base', 'Computer: offline', 'bad');
+    showStand('base', null);
+  };
+  c.on('close', end);
+  c.on('error', end);
 }
 
 // Either the phone or the computer can hold the Bluetooth link to the micro:bit, so both
@@ -484,53 +312,23 @@ function showStand(from, msg) {
   setChip('stand', text, best.ready ? 'ok' : 'bad');
 }
 
-function dialPhoneDiag() {
-  const c = peer.connect(ids.phone, { reliable: true, metadata: { kind: 'diag' } });
-  diagConn = c; diagStarted = Date.now();
-  c.on('data', (msg) => {
-    if (msg?.type === 'full') {
-      phoneFull = true;
-      setChip('phone', `Phone: full (${msg.max} drivers already)`, 'bad');
-      return;
-    }
-    if (msg?.type === 'stand') return showStand('phone', msg);
-    if (msg?.type === 'diag-all') phoneLog = msg.lines.slice();
-    else if (msg?.type === 'diag') { phoneLog.push(msg.line); if (phoneLog.length > 600) phoneLog.shift(); }
-  });
-  c.on('open', () => {
-    if (c !== diagConn) return;
-    updateButtons();
-    const beat = setInterval(() => (c.open ? c.send({ type: 'ping' }) : clearInterval(beat)), 1000);
-  });
-  const end = () => {
-    if (c !== diagConn) return;
-    diagConn = null;
-    standStatus.phone = null;
-    updateButtons();
-    if (!canDrive()) release();
-    showStand('phone', null);
-  };
-  c.on('close', end);
-  c.on('error', end);
-}
-
 function diagnosticsText() {
   return [
     `# Lego Presence diagnostics · ${new Date().toString()}`,
-    `# room ${room} · call ${callLive ? 'live' : 'down'} · computer ${conn?.open ? 'connected' : 'down'}`,
+    `# room ${room} · phone ${phoneConn?.open ? 'connected' : 'down'} · computer ${baseConn?.open ? 'connected' : 'down'}`,
     '', '## This device (drive page)', ...diag.lines,
-    '', `## Phone${diagConn?.open ? '' : ' (log link currently down: showing what arrived before)'}`, ...phoneLog,
+    '', `## Phone${phoneConn?.open ? '' : ' (link currently down: showing what arrived before)'}`, ...phoneLog,
   ].join('\n');
 }
 
-const diagDialog = document.getElementById('diag-dialog');
-document.getElementById('diag-open').addEventListener('click', () => {
-  document.getElementById('diag-text').value = diagnosticsText();
+const diagDialog = $('diag-dialog');
+$('diag-open').addEventListener('click', () => {
+  $('diag-text').value = diagnosticsText();
   diagDialog.showModal();
 });
-document.getElementById('diag-close').addEventListener('click', () => diagDialog.close());
-document.getElementById('diag-copy').addEventListener('click', async (e) => {
-  const text = document.getElementById('diag-text');
+$('diag-close').addEventListener('click', () => diagDialog.close());
+$('diag-copy').addEventListener('click', async (e) => {
+  const text = $('diag-text');
   try {
     await navigator.clipboard.writeText(text.value);
   } catch {
@@ -541,61 +339,14 @@ document.getElementById('diag-copy').addEventListener('click', async (e) => {
   setTimeout(() => (e.target.textContent = 'Copy'), 1500);
 });
 
-// ---- Connection stats -------------------------------------------------------
-
-const $reconnecting = document.getElementById('reconnecting');
-let statsTimer = null;
-
-function startStats(c) {
-  stopStats();
-  const read = makeStatsReader(c.peerConnection);
-  const chip = document.getElementById('stats');
-  chip.hidden = false;
-  statsTimer = setInterval(async () => {
-    const s = await read().catch(() => null);
-    if (s) setChip('stats', `📶 ${s.text}`, s.bad ? 'bad' : 'ok');
-  }, 1000);
-}
-
-function stopStats() {
-  clearInterval(statsTimer);
-  document.getElementById('stats').hidden = true;
-}
-
-function dialBase() {
-  setChip('base', 'Computer: connecting…', 'wait');
-  const c = peer.connect(ids.base, { reliable: true, metadata: { name: myName() } });
-  conn = c; connStarted = Date.now();
-  c.on('open', () => {
-    if (c !== conn) return;
-    setChip('base', 'Computer: live', 'ok');
-    updateButtons();
-    const beat = setInterval(() => (c.open ? c.send({ type: 'ping' }) : clearInterval(beat)), 1000);
-  });
-  c.on('data', (msg) => {
-    if (msg?.type === 'status') showStand('base', msg);
-  });
-  const end = () => {
-    if (c !== conn) return;
-    conn = null;
-    standStatus.base = null;
-    updateButtons();
-    if (!canDrive()) release();
-    setChip('base', 'Computer: offline', 'bad');
-    showStand('base', null);
-  };
-  c.on('close', end);
-  c.on('error', end);
-}
-
 // ---- Stand controls (every button in the Mbit app) -------------------------
 
 function send(msg) {
-  if (conn?.open) conn.send(msg);
-  if (diagConn?.open) diagConn.send(msg);
+  if (baseConn?.open) baseConn.send(msg);
+  if (phoneConn?.open) phoneConn.send(msg);
 }
 
-const canDrive = () => !!(conn?.open || diagConn?.open);
+const canDrive = () => !!(baseConn?.open || phoneConn?.open);
 function updateButtons() {
   standButtons.forEach((b) => (b.disabled = !canDrive()));
 }
@@ -657,6 +408,7 @@ addEventListener('keyup', (e) => {
   if (KEYS[e.key] === holds.move.held) holds.move.release();
 });
 addEventListener('blur', release);
+document.addEventListener('visibilitychange', () => document.hidden && release());
 
 // Lights, colour changes and modes are single taps. The light colours, effects and modes stay
 // on, and the stand reports which, so every driver sees the same thing.
@@ -682,16 +434,6 @@ document.querySelectorAll('[data-tab]').forEach((t) => t.addEventListener('click
   openTab(t.getAttribute('aria-expanded') === 'true' ? null : t.dataset.tab);
 }));
 openTab(store.get('tab'));
-document.addEventListener('visibilitychange', () => document.hidden && release());
-
-// ---- Mute / hide camera ---------------------------------------------------
-
-$('mic').addEventListener('click', () => {
-  if (!micTrack) return;
-  micTrack.enabled = !micTrack.enabled;
-  $('mic').setAttribute('aria-pressed', String(!micTrack.enabled));
-  $('mic').textContent = micTrack.enabled ? '🎤 Mute' : '🎤 Unmute';
-});
 </script>
 </body>
 </html>

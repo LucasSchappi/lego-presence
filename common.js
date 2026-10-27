@@ -1,5 +1,5 @@
 // Shared helpers for the three pages (drive / phone / base).
-// Signalling uses the free PeerJS cloud server; media and data go peer-to-peer over WebRTC.
+// Signalling uses the free PeerJS cloud server; commands and status go peer-to-peer over WebRTC.
 
 const PEER_PREFIX = 'lego-presence-v1-';
 
@@ -24,7 +24,7 @@ function peerIds(room) {
 }
 
 // ---- Diagnostics -------------------------------------------------------------
-// A rolling log of everything that could explain a dropped call. The phone streams its
+// A rolling log of everything that could explain a dropped connection. The phone streams its
 // log to the drive page, where "Diagnostics" shows both.
 
 const diag = {
@@ -52,7 +52,7 @@ navigator.connection?.addEventListener?.('change', () => {
 
 // ---- Relay (TURN) -------------------------------------------------------------
 // Direct connections often fail between different networks (mobile data, most home routers
-// on both ends). A TURN relay carries the video when that happens. Callers must
+// on both ends). A TURN relay carries the connection when that happens. Callers must
 // `await iceReady` before creating a Peer so the relay is included.
 
 const iceReady = (async () => {
@@ -149,86 +149,6 @@ async function keepAwake() {
   });
 }
 
-// PeerJS never gives up on a "disconnected" connection, and a closed tab only shows up as
-// "disconnected". Wi-Fi hiccups look the same but usually recover within a few seconds,
-// so only treat the connection as gone once it has stayed down for a while.
-function watchIce(mediaConnection, onGone, graceMs = 15000) {
-  const pc = mediaConnection.peerConnection;
-  if (!pc) return;
-  let timer = null;
-  pc.addEventListener('iceconnectionstatechange', () => {
-    const s = pc.iceConnectionState;
-    clearTimeout(timer);
-    if (s === 'failed' || s === 'closed') onGone();
-    else if (s === 'disconnected') {
-      timer = setTimeout(() => { diag.log(`gave up after ${graceMs / 1000}s disconnected`); onGone(); }, graceMs);
-    }
-  });
-  // Chrome reports a dead connection as "failed" here well before the grace period runs out.
-  pc.addEventListener('connectionstatechange', () => {
-    if (pc.connectionState === 'failed') { clearTimeout(timer); onGone(); }
-  });
-}
-
-// Calls `fn(stream)` once the call has media AND the connection is actually up. PeerJS's
-// 'stream' event fires as soon as the call is negotiated, even if the network then blocks
-// every route and no video ever arrives.
-function onCallConnected(mediaConnection, fn) {
-  const pc = mediaConnection.peerConnection;
-  let stream = null, done = false;
-  const check = () => {
-    if (done || !stream || !['connected', 'completed'].includes(pc.iceConnectionState)) return;
-    done = true;
-    fn(stream);
-  };
-  mediaConnection.on('stream', (s) => { stream = s; check(); });
-  pc.addEventListener('iceconnectionstatechange', check);
-}
-
-// ---- Video quality ----------------------------------------------------------
-
-// 540p is plenty for a phone screen and leaves headroom when the picture is moving.
-const CAMERA_CONSTRAINTS = { facingMode: 'user', width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 30, max: 30 } };
-const MIC_CONSTRAINTS = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
-
-async function getCameraAndMic(contentHint) {
-  const stream = await navigator.mediaDevices.getUserMedia({ video: CAMERA_CONSTRAINTS, audio: MIC_CONSTRAINTS });
-  // "motion" tells the encoder to keep frames flowing rather than keep every frame sharp.
-  stream.getVideoTracks().forEach((t) => { if ('contentHint' in t) t.contentHint = contentHint; });
-  return stream;
-}
-
-// Caps the video bitrate and, when the network struggles, drops resolution instead of frames.
-// A rotating camera changes the whole picture at once; without a cap the encoder bursts
-// past what the Wi-Fi can carry and the video stalls.
-function tuneVideo(mediaConnection, maxBitrate) {
-  const pc = mediaConnection.peerConnection;
-  if (!pc) return () => {};
-  const apply = async () => {
-    if (pc.connectionState !== 'connected') return;
-    for (const sender of pc.getSenders()) {
-      if (sender.track?.kind !== 'video') continue;
-      const params = sender.getParameters();
-      if (!params.encodings?.length) continue;
-      params.encodings[0].maxBitrate = maxBitrate;
-      try {
-        await sender.setParameters({ ...params, degradationPreference: 'maintain-framerate' });
-      } catch {
-        // Some browsers (Safari) reject degradationPreference; keep the bitrate cap anyway.
-        try { await sender.setParameters(params); } catch (err) { console.warn('tuneVideo', err); }
-      }
-    }
-  };
-  pc.addEventListener('connectionstatechange', apply);
-  apply();
-  // Returns a function to change the cap later (e.g. when more people join).
-  return (bitrate) => {
-    if (bitrate === maxBitrate) return;
-    maxBitrate = bitrate;
-    apply();
-  };
-}
-
 function selectedPair(report) {
   let id = null, fallback = null;
   report.forEach((r) => {
@@ -244,8 +164,8 @@ function describeRoute(report, pair) {
   return `${side(report.get(pair.localCandidateId))} ↔ ${side(report.get(pair.remoteCandidateId))}`;
 }
 
-// Logs every state change on a WebRTC connection, and a stats line every few seconds.
-function logConnection(pc, label, everyMs = 5000) {
+// Logs every state change on a WebRTC connection, and the route it ends up taking.
+function logConnection(pc, label) {
   pc.addEventListener('iceconnectionstatechange', () => diag.log(`${label} ice ${pc.iceConnectionState}`));
   pc.addEventListener('connectionstatechange', async () => {
     diag.log(`${label} connection ${pc.connectionState}`);
@@ -254,74 +174,4 @@ function logConnection(pc, label, everyMs = 5000) {
       diag.log(`${label} route ${describeRoute(report, selectedPair(report))}`);
     }
   });
-
-  let last = {};
-  const timer = setInterval(async () => {
-    if (pc.connectionState === 'closed') return clearInterval(timer);
-    const report = await pc.getStats().catch(() => null);
-    if (!report) return;
-    const parts = [];
-    const pair = selectedPair(report);
-    if (pair?.currentRoundTripTime != null) parts.push(`rtt ${Math.round(pair.currentRoundTripTime * 1000)}ms`);
-    if (pair?.availableOutgoingBitrate) parts.push(`uplink est ${Math.round(pair.availableOutgoingBitrate / 1000)}kbps`);
-    report.forEach((r) => {
-      if (r.kind !== 'video') return;
-      const prev = last[r.id];
-      const secs = prev ? (r.timestamp - prev.timestamp) / 1000 || 1 : 0;
-      if (r.type === 'outbound-rtp') {
-        const kbps = prev ? Math.round(((r.bytesSent - prev.bytesSent) * 8) / 1000 / secs) : 0;
-        parts.push(`send ${r.frameHeight || 0}p ${Math.round(r.framesPerSecond || 0)}fps ${kbps}kbps limit=${r.qualityLimitationReason ?? '?'}`);
-      } else if (r.type === 'inbound-rtp') {
-        const kbps = prev ? Math.round(((r.bytesReceived - prev.bytesReceived) * 8) / 1000 / secs) : 0;
-        const lost = prev ? r.packetsLost - prev.packetsLost : 0;
-        const freezes = r.freezeCount != null ? ` freezes=${r.freezeCount}` : '';
-        parts.push(`recv ${r.frameHeight || 0}p ${Math.round(r.framesPerSecond || 0)}fps ${kbps}kbps lost+${lost}${freezes}`);
-      } else if (r.type === 'remote-inbound-rtp') {
-        parts.push(`far-end loss ${Math.round((r.fractionLost || 0) * 100)}%`);
-      }
-      last[r.id] = r;
-    });
-    if (parts.length) diag.log(`${label} ${parts.join(' | ')}`);
-  }, everyMs);
-}
-
-// Summarises the incoming video on a connection, e.g. "540p · 30 fps · 900 kbps · 0% loss · 40 ms · direct".
-function makeStatsReader(pc) {
-  let last = null;
-  return async () => {
-    const report = await pc.getStats();
-    let video = null;
-    report.forEach((r) => {
-      if (r.type === 'inbound-rtp' && r.kind === 'video') video = r;
-    });
-    const pair = selectedPair(report);
-    if (!video) return null;
-
-    const now = { t: video.timestamp, bytes: video.bytesReceived, got: video.packetsReceived, lost: video.packetsLost };
-    let kbps = 0, loss = 0;
-    if (last) {
-      const secs = (now.t - last.t) / 1000 || 1;
-      kbps = Math.round(((now.bytes - last.bytes) * 8) / 1000 / secs);
-      const got = now.got - last.got, lost = now.lost - last.lost;
-      loss = got + lost > 0 ? Math.round((lost / (got + lost)) * 100) : 0;
-    }
-    last = now;
-
-    const local = pair && report.get(pair.localCandidateId);
-    const remote = pair && report.get(pair.remoteCandidateId);
-    const route = !pair ? '?'
-      : local?.candidateType === 'relay' || remote?.candidateType === 'relay' ? 'relayed'
-      : local?.candidateType === 'host' && remote?.candidateType === 'host' ? 'same network'
-      : 'direct';
-    const rtt = pair?.currentRoundTripTime != null ? `${Math.round(pair.currentRoundTripTime * 1000)} ms` : '';
-    const parts = [
-      video.frameHeight ? `${video.frameHeight}p` : 'no video',
-      `${Math.round(video.framesPerSecond || 0)} fps`,
-      `${kbps} kbps`,
-      `${loss}% loss`,
-      rtt,
-      route,
-    ].filter(Boolean);
-    return { text: parts.join(' · '), bad: loss >= 5 || (video.framesPerSecond || 0) < 10 };
-  };
 }

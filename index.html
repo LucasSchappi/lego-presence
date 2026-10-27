@@ -10,14 +10,14 @@
 <div class="center">
   <div class="card">
     <h1>🧱 Lego Presence</h1>
-    <p>Pick a room name, then open the right page on each device. All three must use the same room.</p>
+    <p>Pick a room name, then open the right page on each device. They must all use the same room.</p>
     <form id="room-picker" style="margin-bottom:16px">
       <input name="room" placeholder="room name, e.g. kitchen-bot" autocomplete="off" required>
     </form>
     <div class="role-list">
-      <a data-page="phone.html" href="phone.html"><strong>📱 Phone on the stand</strong><small>Shows the remote person, sends the room's camera and mic back.</small></a>
-      <a data-page="base.html" href="base.html"><strong>💻 Computer (Bluetooth base)</strong><small>Receives left/right commands and passes them to the micro:bit.</small></a>
-      <a data-page="drive.html" href="drive.html"><strong>🕹️ Remote person</strong><small>Video call with the phone, and left/right controls.</small></a>
+      <a data-page="phone.html" href="phone.html"><strong>📱 Phone on the stand</strong><small>Talks to the micro:bit over Bluetooth and runs Auto. No camera or mic.</small></a>
+      <a data-page="base.html" href="base.html"><strong>💻 Computer (optional)</strong><small>Talks to the micro:bit instead, when the phone can't do Bluetooth.</small></a>
+      <a data-page="drive.html" href="drive.html"><strong>🕹️ Remote control</strong><small>Every button from the Mbit app, from anywhere.</small></a>
     </div>
   </div>
 </div>

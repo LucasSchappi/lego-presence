@@ -90,8 +90,6 @@ input, select {
 .chip[data-state="wait"]::before { background: var(--wait); }
 .chip[data-state="bad"]::before { background: var(--bad); }
 
-video { background: #000; display: block; }
-
 .role-list { display: grid; gap: 10px; text-align: left; }
 .role-list a {
   display: block;
