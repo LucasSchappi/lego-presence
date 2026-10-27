@@ -30,16 +30,36 @@
   #reconnecting { pointer-events: none; background: rgba(0,0,0,.35); }
 
   .controls {
-    display: flex; align-items: center; justify-content: center; gap: 16px;
+    display: flex; align-items: flex-start; justify-content: center; gap: 12px 20px;
     padding: 12px 16px max(12px, env(safe-area-inset-bottom));
     background: var(--panel); border-top: 1px solid var(--line); flex-wrap: wrap;
+    max-height: 55vh; overflow-y: auto;
   }
-  .arrow {
-    width: 96px; height: 72px; font-size: 2rem; border-radius: 16px;
-    touch-action: none; user-select: none; -webkit-user-select: none;
+  [data-hold] { touch-action: none; user-select: none; -webkit-user-select: none; }
+  .controls [data-hold].active { background: var(--accent); color: #111; border-color: var(--accent); }
+  [data-hold]:disabled, [data-tap]:disabled { opacity: 0.4; cursor: not-allowed; }
+  .pad { display: grid; grid-template-columns: repeat(3, 64px); grid-auto-rows: 52px; gap: 6px; }
+  .pad button { padding: 0; font-size: 1.6rem; border-radius: 14px; }
+
+  .extras { flex: 1 1 300px; max-width: 520px; display: grid; gap: 8px; }
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tabs button { padding: 0.35em 0.8em; font-size: 0.9rem; }
+  .tabs button[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+  .panel { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .panel .note { width: 100%; margin: 0; color: var(--muted); font-size: 0.8rem; }
+  .panel button[aria-pressed="true"] { background: var(--accent); color: #111; border-color: var(--accent); }
+  .swatch { display: inline-block; width: 0.8em; height: 0.8em; border-radius: 50%; margin-right: 0.4em; vertical-align: -0.05em; }
+
+  /* Piano: each white key spans two of the 16 columns, so a black key can sit across two of them. */
+  .piano { display: grid; gap: 0; align-items: stretch; grid-template-columns: repeat(16, 1fr); grid-template-rows: 44px 28px; width: min(100%, 380px); }
+  .piano button { padding: 0; border-radius: 0 0 8px 8px; }
+  .piano .white {
+    grid-row: 1 / 3; margin: 0 1.5px; background: #f2f2f2; color: #333; border-color: #bbb;
+    display: flex; align-items: flex-end; justify-content: center; padding-bottom: 4px; font-size: 0.75rem;
   }
-  .arrow.active { background: var(--accent); color: #111; border-color: var(--accent); }
-  .arrow:disabled { opacity: 0.4; cursor: not-allowed; }
+  .piano .black { grid-row: 1; z-index: 1; margin: 0 22%; background: #0b0d10; border-color: #000; border-radius: 0 0 6px 6px; }
+
+  .misc { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: center; max-width: 340px; }
   dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 14px; width: min(900px, calc(100vw - 32px)); }
   dialog::backdrop { background: rgba(0,0,0,.6); }
   #diag-text { width: 100%; height: 55vh; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; font: 11px/1.4 ui-monospace, Menlo, monospace; }
@@ -89,20 +109,75 @@
     </div>
   </div>
 
+  <!-- Every button in the Mbit app: the drive pad, then its Music / Car lights / RGB lights / Mode tabs. -->
   <div class="controls">
-    <button class="arrow" id="left" data-dir="left" disabled aria-label="Turn left">◀</button>
-    <button id="mic" aria-pressed="false" disabled>🎤 Mute</button>
-    <select id="look-switch" disabled aria-label="How you appear on the phone">
-      <option value="camera">📷 Camera</option>
-      <option value="avatar">🙂 Animated face</option>
-      <option value="picture">🖼️ Picture</option>
-      <option value="name">🔤 Name only</option>
-    </select>
-    <button id="change-picture" hidden>🖼️ Change picture</button>
-    <button id="reset-face" hidden title="Relearn your neutral face">😐 Reset face</button>
-    <button class="arrow" id="right" data-dir="right" disabled aria-label="Turn right">▶</button>
-    <button id="diag-open">🩺 Diagnostics</button>
-    <div class="hint">Hold a button (or the ← → keys) to turn the stand. <span id="notice"></span></div>
+    <div class="pad">
+      <button data-hold="move" data-key="spinLeft" disabled aria-label="Spin left">↺</button>
+      <button data-hold="move" data-key="forward" disabled aria-label="Forward">▲</button>
+      <button data-hold="move" data-key="spinRight" disabled aria-label="Spin right">↻</button>
+      <button data-hold="move" data-key="left" disabled aria-label="Turn left">◀</button>
+      <button data-hold="move" data-key="back" disabled aria-label="Back">▼</button>
+      <button data-hold="move" data-key="right" disabled aria-label="Turn right">▶</button>
+    </div>
+
+    <div class="extras">
+      <div class="tabs">
+        <button data-tab="music" aria-expanded="false">🎵 Music</button>
+        <button data-tab="car" aria-expanded="false">🚗 Car lights</button>
+        <button data-tab="rgb" aria-expanded="false">🌈 RGB lights</button>
+        <button data-tab="mode" aria-expanded="false">🤖 Mode</button>
+      </div>
+      <div class="panel piano" data-panel="music" hidden>
+        <button class="white" data-hold="note" data-key="do" style="grid-column:1/span 2" disabled>Do</button>
+        <button class="white" data-hold="note" data-key="re" style="grid-column:3/span 2" disabled>Re</button>
+        <button class="white" data-hold="note" data-key="mi" style="grid-column:5/span 2" disabled>Mi</button>
+        <button class="white" data-hold="note" data-key="fa" style="grid-column:7/span 2" disabled>Fa</button>
+        <button class="white" data-hold="note" data-key="so" style="grid-column:9/span 2" disabled>So</button>
+        <button class="white" data-hold="note" data-key="la" style="grid-column:11/span 2" disabled>La</button>
+        <button class="white" data-hold="note" data-key="ti" style="grid-column:13/span 2" disabled>Ti</button>
+        <button class="white" data-hold="note" data-key="highDo" style="grid-column:15/span 2" disabled aria-label="High Do">Do↑</button>
+        <button class="black" data-hold="note" data-key="doSharp" style="grid-column:2/span 2" disabled aria-label="Do sharp"></button>
+        <button class="black" data-hold="note" data-key="reSharp" style="grid-column:4/span 2" disabled aria-label="Re sharp"></button>
+        <button class="black" data-hold="note" data-key="faSharp" style="grid-column:8/span 2" disabled aria-label="Fa sharp"></button>
+        <button class="black" data-hold="note" data-key="soSharp" style="grid-column:10/span 2" disabled aria-label="So sharp"></button>
+        <button class="black" data-hold="note" data-key="laSharp" style="grid-column:12/span 2" disabled aria-label="La sharp"></button>
+      </div>
+      <div class="panel" data-panel="car" hidden>
+        <button data-tap="red" disabled><span class="swatch" style="background:#e53935"></span>Red</button>
+        <button data-tap="green" disabled><span class="swatch" style="background:#43a047"></span>Green</button>
+        <button data-tap="blue" disabled><span class="swatch" style="background:#1e88e5"></span>Blue</button>
+        <button data-tap="yellow" disabled><span class="swatch" style="background:#fdd835"></span>Yellow</button>
+        <button data-tap="cyan" disabled><span class="swatch" style="background:#00bcd4"></span>Cyan</button>
+        <button data-tap="pink" disabled><span class="swatch" style="background:#ff00ff"></span>Pink</button>
+        <button data-tap="lightsOff" disabled>⭘ Off</button>
+      </div>
+      <div class="panel" data-panel="rgb" hidden>
+        <button data-tap="flow" data-switch aria-pressed="false" disabled>Flowing light</button>
+        <button data-tap="marquee" data-switch aria-pressed="false" disabled>Marquee light</button>
+        <button data-tap="breathe" data-switch aria-pressed="false" disabled>Breathing light</button>
+        <button data-tap="changeColor" disabled>Change colour</button>
+      </div>
+      <div class="panel" data-panel="mode" hidden>
+        <button data-tap="tracking" data-switch aria-pressed="false" disabled>Tracking</button>
+        <button data-tap="avoid" data-switch aria-pressed="false" disabled>Obstacle avoidance</button>
+        <button data-tap="follow" data-switch aria-pressed="false" disabled>Following</button>
+        <p class="note">These make the stand move by itself until you tap again. They switch off when every driver has left.</p>
+      </div>
+    </div>
+
+    <div class="misc">
+      <button id="mic" aria-pressed="false" disabled>🎤 Mute</button>
+      <select id="look-switch" disabled aria-label="How you appear on the phone">
+        <option value="camera">📷 Camera</option>
+        <option value="avatar">🙂 Animated face</option>
+        <option value="picture">🖼️ Picture</option>
+        <option value="name">🔤 Name only</option>
+      </select>
+      <button id="change-picture" hidden>🖼️ Change picture</button>
+      <button id="reset-face" hidden title="Relearn your neutral face">😐 Reset face</button>
+      <button id="diag-open">🩺 Diagnostics</button>
+    </div>
+    <div class="hint">Hold a button (or the arrow keys) to move the stand. <span id="notice"></span></div>
     <input type="file" id="picture-file" accept="image/*" hidden>
   </div>
 </div>
@@ -126,7 +201,7 @@ const room = getRoomOrShowForm();
 const ids = room && peerIds(room);
 const remoteVideo = document.getElementById('remote');
 const selfVideo = document.getElementById('self');
-const arrows = [...document.querySelectorAll('.arrow')];
+const standButtons = [...document.querySelectorAll('[data-hold], [data-tap]')];
 
 const PENDING_TIMEOUT = 15000; // relayed connections can take several seconds to come up
 const RETRY_EVERY = 3000;
@@ -399,6 +474,7 @@ function showStand(from, msg) {
   standStatus[from] = msg;
   const best = [standStatus.phone, standStatus.base].find((m) => m?.ready)
     || standStatus.phone || standStatus.base;
+  showSwitches(best?.switches);
   if (!best) return setChip('stand', 'Stand', '');
   const via = best === standStatus.phone ? 'phone' : 'computer';
   let text = `Stand: ${best.text} (via ${via})`;
@@ -422,14 +498,14 @@ function dialPhoneDiag() {
   });
   c.on('open', () => {
     if (c !== diagConn) return;
-    updateArrows();
+    updateButtons();
     const beat = setInterval(() => (c.open ? c.send({ type: 'ping' }) : clearInterval(beat)), 1000);
   });
   const end = () => {
     if (c !== diagConn) return;
     diagConn = null;
     standStatus.phone = null;
-    updateArrows();
+    updateButtons();
     if (!canDrive()) release();
     showStand('phone', null);
   };
@@ -492,7 +568,7 @@ function dialBase() {
   c.on('open', () => {
     if (c !== conn) return;
     setChip('base', 'Computer: live', 'ok');
-    updateArrows();
+    updateButtons();
     const beat = setInterval(() => (c.open ? c.send({ type: 'ping' }) : clearInterval(beat)), 1000);
   });
   c.on('data', (msg) => {
@@ -502,7 +578,7 @@ function dialBase() {
     if (c !== conn) return;
     conn = null;
     standStatus.base = null;
-    updateArrows();
+    updateButtons();
     if (!canDrive()) release();
     setChip('base', 'Computer: offline', 'bad');
     showStand('base', null);
@@ -511,10 +587,7 @@ function dialBase() {
   c.on('error', end);
 }
 
-// ---- Left / right control -------------------------------------------------
-
-let held = null;
-let holdTimer = null;
+// ---- Stand controls (every button in the Mbit app) -------------------------
 
 function send(msg) {
   if (conn?.open) conn.send(msg);
@@ -522,48 +595,91 @@ function send(msg) {
 }
 
 const canDrive = () => !!(conn?.open || diagConn?.open);
-function updateArrows() {
-  arrows.forEach((b) => (b.disabled = !canDrive()));
+function updateButtons() {
+  standButtons.forEach((b) => (b.disabled = !canDrive()));
 }
 
-function press(dir) {
-  if (held === dir || !canDrive()) return;
-  release();
-  held = dir;
-  document.getElementById(dir).classList.add('active');
-  send({ type: 'move', dir, press: true });
-  holdTimer = setInterval(() => send({ type: 'move', dir, press: false }), HOLD_REPEAT);
+// Moving and the piano keys are held. While held they repeat, because the stand lets go by
+// itself when the repeats stop.
+function makeHold(name, message, stopMessage) {
+  let held = null;
+  let timer = null;
+  const button = (key) => document.querySelector(`[data-hold="${name}"][data-key="${key}"]`);
+  return {
+    get held() { return held; },
+    press(key) {
+      if (held === key || !canDrive()) return;
+      this.release();
+      held = key;
+      button(key).classList.add('active');
+      send(message(key, true));
+      timer = setInterval(() => send(message(key, false)), HOLD_REPEAT);
+    },
+    release() {
+      if (!held) return;
+      clearInterval(timer);
+      button(held).classList.remove('active');
+      held = null;
+      send(stopMessage);
+    },
+  };
 }
 
-function release() {
-  if (!held) return;
-  clearInterval(holdTimer);
-  document.getElementById(held).classList.remove('active');
-  held = null;
-  send({ type: 'stop' });
-}
+const holds = {
+  move: makeHold('move', (dir, press) => ({ type: 'move', dir, press }), { type: 'stop' }),
+  note: makeHold('note', (key, press) => ({ type: 'note', key, press }), { type: 'note-stop' }),
+};
+const release = () => Object.values(holds).forEach((h) => h.release());
 
-arrows.forEach((btn) => {
+document.querySelectorAll('[data-hold]').forEach((btn) => {
+  const hold = holds[btn.dataset.hold];
+  const { key } = btn.dataset;
+  // Only let go if this button is still the one held: another finger may have taken over.
+  const up = () => hold.held === key && hold.release();
   btn.addEventListener('pointerdown', (e) => {
     btn.setPointerCapture(e.pointerId);
-    press(btn.dataset.dir);
+    hold.press(key);
   });
-  btn.addEventListener('pointerup', release);
-  btn.addEventListener('pointercancel', release);
-  btn.addEventListener('lostpointercapture', release);
+  btn.addEventListener('pointerup', up);
+  btn.addEventListener('pointercancel', up);
+  btn.addEventListener('lostpointercapture', up);
   btn.addEventListener('contextmenu', (e) => e.preventDefault());
 });
 
-const KEYS = { ArrowLeft: 'left', ArrowRight: 'right' };
+const KEYS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'forward', ArrowDown: 'back' };
 addEventListener('keydown', (e) => {
-  if (!KEYS[e.key]) return;
+  if (!KEYS[e.key] || e.target.matches('input, textarea')) return;
   e.preventDefault();
-  if (!e.repeat) press(KEYS[e.key]);
+  if (!e.repeat) holds.move.press(KEYS[e.key]);
 });
 addEventListener('keyup', (e) => {
-  if (KEYS[e.key] === held) release();
+  if (KEYS[e.key] === holds.move.held) holds.move.release();
 });
 addEventListener('blur', release);
+
+// Lights, colour changes and modes are single taps. The light effects and modes stay on, and
+// the stand reports which, so every driver sees the same thing.
+document.querySelectorAll('[data-tap]').forEach((btn) => {
+  btn.addEventListener('click', () => canDrive() && send({ type: 'tap', key: btn.dataset.tap }));
+});
+
+function showSwitches(on = {}) {
+  const lit = Object.values(on);
+  document.querySelectorAll('[data-switch]').forEach((btn) => {
+    btn.setAttribute('aria-pressed', String(lit.includes(btn.dataset.tap)));
+  });
+}
+
+// Like the app, the extra controls sit under tabs. Tapping the open tab closes it again.
+function openTab(name) {
+  document.querySelectorAll('[data-tab]').forEach((t) => t.setAttribute('aria-expanded', String(t.dataset.tab === name)));
+  document.querySelectorAll('[data-panel]').forEach((p) => (p.hidden = p.dataset.panel !== name));
+  store.set('tab', name || '');
+}
+document.querySelectorAll('[data-tab]').forEach((t) => t.addEventListener('click', () => {
+  openTab(t.getAttribute('aria-expanded') === 'true' ? null : t.dataset.tab);
+}));
+openTab(store.get('tab'));
 document.addEventListener('visibilitychange', () => document.hidden && release());
 
 // ---- Mute / hide camera ---------------------------------------------------

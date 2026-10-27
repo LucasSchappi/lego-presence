@@ -53,6 +53,25 @@ Either way the same commands go out over the micro:bit's UART service, exactly w
 (Mbit's spin buttons use `E#` / `F#`; the computer page lets you change the commands.) If the
 micro:bit drops out, both pages keep trying to reconnect.
 
+The drive page also has every other button in the Mbit app, sending the app's own commands:
+
+<details><summary>All Mbit commands</summary>
+
+| Buttons | Commands |
+|---|---|
+| ▲ ▼ ◀ ▶, spin ↺ ↻ (held) | `A#` `B#` `C#` `D#`, `E#` `F#`; released: `0#` |
+| Music: Do Re Mi Fa So La Ti high Do (held) | `1#` … `8#`; released: `O#` |
+| Music: black keys (held) | `B1#` … `B5#`; released: `O#` |
+| Car lights: red, green, blue, yellow, cyan, pink, off | `G#` `H#` `I#` `J#` `K#` `L#`, `M#` |
+| RGB lights: flowing, marquee, breathing (switches) | `N#` `P#` `Q#`; off: `W#` |
+| RGB lights: change colour | `R#` |
+| Mode: tracking, obstacle avoidance, following (switches) | `S#` `T#` `U#`; off: `V#` |
+
+Only one light effect and one mode can be on at a time; turning one on switches the other off first.
+The `keys.py` and Event service outputs on the computer page only do ◀ ▶.
+
+</details>
+
 ### Other outputs on the computer page
 
 | Output | What it does |
@@ -83,8 +102,9 @@ and sends its front camera back to them.
 
 ## 4. Remote person
 
-Open **https://your-site/drive.html?room=YOURROOM** and click **Start**. To turn the stand,
-hold ◀ / ▶ (or the arrow keys). The status chips show whether the phone, the computer and
+Open **https://your-site/drive.html?room=YOURROOM** and click **Start**. To move the stand,
+hold ▲ ▼ ◀ ▶ or the spin buttons ↺ ↻ (or use the arrow keys). The **Music**, **Car lights**, **RGB lights** and
+**Mode** tabs have the rest of the Mbit app's buttons. The status chips show whether the phone, the computer and
 the stand are ready.
 
 ## How drivers appear on the phone
@@ -113,7 +133,9 @@ Up to **4** people can open `drive.html` in the same room at the same time:
 
 ## Safety
 
-- If commands stop arriving for 0.5 s (dropped connection, closed tab), `base.html` stops the stand.
+- If commands stop arriving for 0.5 s (dropped connection, closed tab), whichever page holds the
+  Bluetooth link stops the stand and any note that's playing.
+- The self-driving modes (tracking, obstacle avoidance, following) switch off when every driver has left.
 - `keys.py` (if used) lets go of the mouse after 0.6 s without a refresh, and only listens on `127.0.0.1` and only accepts requests from localhost pages. To use a
   hosted `base.html` instead, add `--allow-origin https://your-site`.
 

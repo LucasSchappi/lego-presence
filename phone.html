@@ -205,9 +205,24 @@ const link = new MicrobitLink({
 
 const stand = new StandControl({
   output: {
-    start: (dir) => link.sendText(MBIT_COMMANDS[dir]),
-    stop: () => link.sendText(MBIT_COMMANDS.stop),
+    start: (dir) => link.sendText(MBIT.move.keys[dir]),
+    stop: () => link.sendText(MBIT.move.release),
   },
+  log: (m) => diag.log(m),
+  onChange: broadcastStand,
+});
+
+const piano = new StandControl({
+  keys: Object.keys(MBIT.note.keys),
+  output: {
+    start: (note) => link.sendText(MBIT.note.keys[note]),
+    stop: () => link.sendText(MBIT.note.release),
+  },
+  log: (m) => diag.log(m),
+});
+
+const taps = new StandTaps({
+  send: (text) => link.sendText(text),
   log: (m) => diag.log(m),
   onChange: broadcastStand,
 });
@@ -239,6 +254,7 @@ function broadcastStand() {
     text: link.text,
     controller: stand.controller ? driverNames.get(stand.controller) || 'someone' : null,
     controllerId: stand.controller,
+    switches: taps.on,
   };
   diagConns.forEach((conn) => conn.open && conn.send(msg));
 }
@@ -250,12 +266,17 @@ function onDiagConnection(conn) {
   const cleanup = () => {
     diag.listeners.delete(push);
     stand.stop(conn.peer); // don't leave the stand turning if they vanish mid-press
+    piano.stop(conn.peer);
     if (diagConns.get(conn.peer) === conn) diagConns.delete(conn.peer);
+    if (!diagConns.size) taps.turnOff('mode'); // nobody is watching it drive itself
   };
   conn.on('data', (msg) => {
     if (diagConns.get(conn.peer) !== conn) return;
     if (msg?.type === 'move') stand.move(conn.peer, msg.dir, msg.press !== false);
     else if (msg?.type === 'stop') stand.stop(conn.peer);
+    else if (msg?.type === 'note') piano.move(conn.peer, msg.key, msg.press !== false);
+    else if (msg?.type === 'note-stop') piano.stop(conn.peer);
+    else if (msg?.type === 'tap') taps.tap(msg.key);
   });
   conn.on('open', () => {
     diagConns.get(conn.peer)?.close();

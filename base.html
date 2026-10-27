@@ -13,8 +13,8 @@
   label { display: grid; gap: 4px; font-size: 0.85rem; color: var(--muted); }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
   .note { color: var(--muted); font-size: 0.85rem; margin: 10px 0 0; }
-  .indicator { display: flex; gap: 12px; justify-content: center; font-size: 2.5rem; }
-  .indicator span { width: 88px; text-align: center; border-radius: 14px; border: 1px solid var(--line); opacity: 0.35; }
+  .indicator { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; font-size: 2rem; }
+  .indicator span { width: 64px; text-align: center; border-radius: 14px; border: 1px solid var(--line); opacity: 0.35; }
   .indicator span.on { opacity: 1; background: var(--accent); color: #111; }
   #log { font: 12px/1.5 ui-monospace, Menlo, monospace; color: var(--muted); max-height: 180px; overflow: auto; white-space: pre-wrap; margin: 0; }
 </style>
@@ -39,7 +39,7 @@
   </div>
 
   <section>
-    <h2>How should left/right reach the stand?</h2>
+    <h2>How should the driver's buttons reach the stand?</h2>
     <label>Output
       <select id="mode">
         <option value="uart">Bluetooth → micro:bit, same commands as the Mbit app (no app needed)</option>
@@ -56,6 +56,7 @@
         <a href="http://localhost:8765/base.html">http://localhost:8765</a>.
         Leave Mbit open and connected: while someone drives, the helper brings Mbit to the front
         and holds the mouse on its buttons. Don't move the Mbit window after calibrating.
+        Only ◀ and ▶ work this way; the driver's other buttons need the Bluetooth output.
       </p>
       <div class="row" style="margin-top:10px">
         <input id="helper-url" aria-label="Helper URL">
@@ -75,11 +76,13 @@
         <label>▶ command <input id="uart-right" value="D#"></label>
         <label>Stop command <input id="uart-stop" value="0#"></label>
       </div>
-      <p class="note">Mbit's spin buttons use <code>E#</code> / <code>F#</code> if you want the stand to spin instead.</p>
+      <p class="note">The driver's other buttons (▲ ▼, spin, music, lights and modes) send the Mbit app's
+        own commands. Mbit's spin buttons use <code>E#</code> / <code>F#</code> if you want ◀ ▶ to spin instead.</p>
     </div>
 
     <div data-for="event" hidden>
-      <p class="note">Writes (source, value) events. Match these to <em>on event from … with value …</em> blocks on the micro:bit.</p>
+      <p class="note">Writes (source, value) events. Match these to <em>on event from … with value …</em> blocks on the micro:bit.
+        Only ◀ and ▶ work this way; the driver's other buttons need the Bluetooth output.</p>
       <div class="grid" style="margin-top:10px">
         <label>Event source ID <input id="ev-src" type="number" value="9010"></label>
         <label>Left pressed <input id="ev-left-down" type="number" value="1"></label>
@@ -97,7 +100,10 @@
 
   <section>
     <h2>Live</h2>
-    <div class="indicator"><span id="ind-left">◀</span><span id="ind-right">▶</span></div>
+    <div class="indicator">
+      <span data-dir="spinLeft">↺</span><span data-dir="left">◀</span><span data-dir="forward">▲</span>
+      <span data-dir="back">▼</span><span data-dir="right">▶</span><span data-dir="spinRight">↻</span>
+    </div>
     <p class="note" style="text-align:center">Test locally: each click (or ← / → key) nudges the stand for half a second.</p>
     <div class="row" style="justify-content:center;margin-top:8px">
       <button class="test" data-dir="left">Test ◀</button>
@@ -152,6 +158,7 @@ function showModePanels() {
 }
 modeSel.addEventListener('change', () => {
   stand.stop();
+  piano.stop();
   stand.output = outputs[modeSel.value];
   store.set('mode', modeSel.value);
   showModePanels();
@@ -213,6 +220,11 @@ function refreshOutputStatus() {
   setOutput(link.ready, link.text);
 }
 
+// keys.py and the Event service only know ◀ and ▶; every other button needs the UART output.
+const TURNS = ['left', 'right'];
+const allButtons = () => modeSel.value === 'uart' || modeSel.value === 'none';
+const sendMbit = (text) => modeSel.value === 'uart' && link.sendText(text);
+
 const outputs = {
   none: { start() {}, refresh() {}, stop() {} },
   keys: {
@@ -222,7 +234,8 @@ const outputs = {
     stop: (dir) => helper(`/press?dir=${dir}&state=up`).catch((e) => log(`Helper: ${e.message}`)),
   },
   uart: {
-    start: (dir) => link.sendText($(`uart-${dir}`).value),
+    // ◀ ▶ and stop can be changed above; the other directions are the Mbit app's own.
+    start: (dir) => link.sendText(TURNS.includes(dir) ? $(`uart-${dir}`).value : MBIT.move.keys[dir]),
     stop: () => link.sendText($('uart-stop').value),
   },
   event: {
@@ -238,14 +251,27 @@ const stand = new StandControl({
   log,
   watchdogMs: WATCHDOG_MS,
   onChange: (st) => {
-    $('ind-left').classList.toggle('on', st.active === 'left');
-    $('ind-right').classList.toggle('on', st.active === 'right');
+    document.querySelectorAll('.indicator span').forEach((s) => s.classList.toggle('on', s.dataset.dir === st.active));
     broadcastStatus();
   },
 });
 
-const driverMove = (id, dir, press) => stand.move(id, dir, press);
-const driverStop = (id) => stand.stop(id);
+const piano = new StandControl({
+  keys: Object.keys(MBIT.note.keys),
+  output: {
+    start: (note) => sendMbit(MBIT.note.keys[note]),
+    stop: () => sendMbit(MBIT.note.release),
+  },
+  log,
+  watchdogMs: WATCHDOG_MS,
+});
+const taps = new StandTaps({ send: sendMbit, log, onChange: broadcastStatus });
+
+const driverMove = (id, dir, press) => (TURNS.includes(dir) || allButtons()) && stand.move(id, dir, press);
+const driverStop = (id) => {
+  stand.stop(id);
+  piano.stop(id);
+};
 
 // Local test: a short nudge rather than press-and-hold, because the helper takes over the
 // mouse (and brings Mbit to the front), so this page never sees the button being let go.
@@ -291,6 +317,7 @@ function broadcastStatus() {
     drivers: drivers.size,
     controller: stand.controller ? driverName(stand.controller) : null,
     controllerId: stand.controller,
+    switches: taps.on,
   };
   drivers.forEach(({ conn }) => conn.open && conn.send(msg));
   setChip('driver', drivers.size
@@ -324,13 +351,17 @@ if (room) {
       if (d?.conn !== c) return;
       d.seen = Date.now();
       if (msg?.type === 'move') driverMove(id, msg.dir, msg.press !== false);
-      else if (msg?.type === 'stop') driverStop(id);
+      else if (msg?.type === 'stop') stand.stop(id);
+      else if (msg?.type === 'note' && allButtons()) piano.move(id, msg.key, msg.press !== false);
+      else if (msg?.type === 'note-stop') piano.stop(id);
+      else if (msg?.type === 'tap' && allButtons()) taps.tap(msg.key);
     });
     const end = () => {
       if (drivers.get(id)?.conn !== c) return;
       log(`${driverName(id)} left`);
       driverStop(id);
       drivers.delete(id);
+      if (!drivers.size) taps.turnOff('mode'); // nobody is watching it drive itself
       broadcastStatus();
     };
     c.on('close', end);

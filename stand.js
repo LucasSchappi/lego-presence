@@ -7,8 +7,32 @@ const STAND_UUID = {
   clientEvent: 'e95d5404-251d-470a-a062-fa1922dfa9a8',
 };
 
-// What the Mbit app itself sends over the micro:bit's UART service.
-const MBIT_COMMANDS = { left: 'C#', right: 'D#', stop: '0#' };
+// Every button in the Yahboom Mbit app, and the text it writes to the micro:bit's UART service
+// (read out of the app itself).
+const MBIT = {
+  // Held: the command goes out on press, and `release` on let go.
+  move: {
+    release: '0#',
+    keys: { forward: 'A#', back: 'B#', left: 'C#', right: 'D#', spinLeft: 'E#', spinRight: 'F#' },
+  },
+  note: {
+    release: 'O#',
+    keys: {
+      do: '1#', re: '2#', mi: '3#', fa: '4#', so: '5#', la: '6#', ti: '7#', highDo: '8#',
+      doSharp: 'B1#', reSharp: 'B2#', faSharp: 'B3#', soSharp: 'B4#', laSharp: 'B5#',
+    },
+  },
+  // Tapped.
+  tap: {
+    red: 'G#', green: 'H#', blue: 'I#', yellow: 'J#', cyan: 'K#', pink: 'L#', lightsOff: 'M#',
+    changeColor: 'R#',
+  },
+  // Tap to turn on, tap again to turn off. Only one of each can be on at a time.
+  switches: {
+    effect: { off: 'W#', keys: { flow: 'N#', marquee: 'P#', breathe: 'Q#' } },
+    mode: { off: 'V#', keys: { tracking: 'S#', avoid: 'T#', follow: 'U#' } },
+  },
+};
 
 // A Bluetooth connection to the micro:bit that reconnects itself if the stand drops out.
 class MicrobitLink {
@@ -124,22 +148,23 @@ class MicrobitLink {
   }
 }
 
-// Turns "left"/"right" from whoever is driving into commands, and stops the stand if the
-// commands go quiet (dropped connection, closed tab). Several people can drive: the most
-// recent press takes control, and the others' "still holding" refreshes can't steal it back.
+// Turns held buttons (a direction, or a piano key) from whoever is driving into commands, and
+// lets go if the commands go quiet (dropped connection, closed tab). Several people can drive:
+// the most recent press takes control, and the others' "still holding" refreshes can't steal it back.
 class StandControl {
-  constructor({ output, log = () => {}, onChange = () => {}, watchdogMs = 500 }) {
+  constructor({ output, keys = Object.keys(MBIT.move.keys), log = () => {}, onChange = () => {}, watchdogMs = 500 }) {
     this.output = output;
+    this.keys = keys;
     this.log = log;
     this.onChange = onChange;
     this.watchdogMs = watchdogMs;
-    this.active = null;     // 'left' | 'right'
+    this.active = null;     // one of keys
     this.controller = null; // driver id
     this.timer = null;
   }
 
   move(driverId, dir, press = true) {
-    if (dir !== 'left' && dir !== 'right') return;
+    if (!this.keys.includes(dir)) return;
     if (!press && this.controller && this.controller !== driverId) return;
     this.controller = driverId;
     if (this.active !== dir) {
@@ -173,5 +198,41 @@ class StandControl {
     this.active = null;
     this.log('■ stop');
     this.output.stop(dir);
+  }
+}
+
+// The Mbit app's tap buttons. The light effects and the self-driving modes are switches: only
+// one of each can be on, and tapping the one that's on turns it off.
+class StandTaps {
+  constructor({ send, log = () => {}, onChange = () => {} }) {
+    this.send = send;
+    this.log = log;
+    this.onChange = onChange;
+    this.on = { effect: null, mode: null };
+  }
+
+  tap(key) {
+    if (Object.hasOwn(MBIT.tap, key)) {
+      this.log(`● ${key}`);
+      this.send(MBIT.tap[key]);
+      return;
+    }
+    const group = Object.keys(MBIT.switches).find((g) => Object.hasOwn(MBIT.switches[g].keys, key));
+    if (!group) return;
+    const wasOn = this.on[group];
+    this.turnOff(group);
+    if (wasOn === key) return;
+    this.on[group] = key;
+    this.log(`● ${key} on`);
+    this.send(MBIT.switches[group].keys[key]);
+    this.onChange(this);
+  }
+
+  turnOff(group) {
+    if (!this.on[group]) return;
+    this.log(`○ ${this.on[group]} off`);
+    this.on[group] = null;
+    this.send(MBIT.switches[group].off);
+    this.onChange(this);
   }
 }
