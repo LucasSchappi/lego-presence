@@ -131,6 +131,8 @@ function makeFixedPeer(id, onStatus, setup) {
 }
 
 async function keepAwake() {
+  if (keepAwake.started) return;
+  keepAwake.started = true;
   if (!('wakeLock' in navigator)) return diag.log('no wake lock support: the screen may sleep');
   const request = async () => {
     try {

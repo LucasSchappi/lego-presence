@@ -101,6 +101,10 @@ Open **https://your-site/phone.html?room=YOURROOM**, tap **Start**, and allow th
 The screen stays awake while the page is open. The phone shows the remote person full-screen
 and sends its front camera back to them.
 
+Once the phone is connected to the stand, **🎲 Auto** makes it move and change colour by itself, with
+no driver or computer needed: every 1–10 s it either lights red, green or blue and goes forward then back
+(0.5–2 s each way), or turns left, right for twice as long, then left again. A driver steering switches it off.
+
 ## 4. Remote person
 
 Open **https://your-site/drive.html?room=YOURROOM** and click **Start**. To move the stand,

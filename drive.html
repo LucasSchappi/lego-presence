@@ -59,7 +59,6 @@
   }
   .piano .black { grid-row: 1; z-index: 1; margin: 0 22%; background: #0b0d10; border-color: #000; border-radius: 0 0 6px 6px; }
 
-  #auto[aria-pressed="true"] { background: var(--accent); color: #111; border-color: var(--accent); }
   .misc { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; justify-content: center; max-width: 340px; }
   dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 14px; width: min(900px, calc(100vw - 32px)); }
   dialog::backdrop { background: rgba(0,0,0,.6); }
@@ -176,7 +175,6 @@
       </select>
       <button id="change-picture" hidden>🖼️ Change picture</button>
       <button id="reset-face" hidden title="Relearn your neutral face">😐 Reset face</button>
-      <button id="auto" aria-pressed="false" disabled title="Move the stand and change its lights by itself">🎲 Auto</button>
       <button id="diag-open">🩺 Diagnostics</button>
     </div>
     <div class="hint">Hold a button (or the arrow keys) to move the stand. <span id="notice"></span></div>
@@ -203,7 +201,7 @@ const room = getRoomOrShowForm();
 const ids = room && peerIds(room);
 const remoteVideo = document.getElementById('remote');
 const selfVideo = document.getElementById('self');
-const standButtons = [...document.querySelectorAll('[data-hold], [data-tap], #auto')];
+const standButtons = [...document.querySelectorAll('[data-hold], [data-tap]')];
 
 const PENDING_TIMEOUT = 15000; // relayed connections can take several seconds to come up
 const RETRY_EVERY = 3000;
@@ -481,6 +479,7 @@ function showStand(from, msg) {
   const via = best === standStatus.phone ? 'phone' : 'computer';
   let text = `Stand: ${best.text} (via ${via})`;
   if (best.drivers > 1) text += ` · ${best.drivers} drivers`;
+  if (best.auto) text += ' · 🎲 Auto on (steering takes over)';
   if (best.controller) text += ` · ${best.controllerId === peer.id ? 'you are' : `${best.controller} is`} steering`;
   setChip('stand', text, best.ready ? 'ok' : 'bad');
 }
@@ -640,7 +639,6 @@ document.querySelectorAll('[data-hold]').forEach((btn) => {
   const up = () => hold.held === key && hold.release();
   btn.addEventListener('pointerdown', (e) => {
     btn.setPointerCapture(e.pointerId);
-    if (hold === holds.move) stopAuto();
     hold.press(key);
   });
   btn.addEventListener('pointerup', up);
@@ -653,9 +651,7 @@ const KEYS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'forward', Arrow
 addEventListener('keydown', (e) => {
   if (!KEYS[e.key] || e.target.matches('input, textarea')) return;
   e.preventDefault();
-  if (e.repeat) return;
-  stopAuto();
-  holds.move.press(KEYS[e.key]);
+  if (!e.repeat) holds.move.press(KEYS[e.key]);
 });
 addEventListener('keyup', (e) => {
   if (KEYS[e.key] === holds.move.held) holds.move.release();
@@ -668,52 +664,6 @@ const tap = (key) => canDrive() && send({ type: 'tap', key });
 document.querySelectorAll('[data-tap]').forEach((btn) => {
   btn.addEventListener('click', () => tap(btn.dataset.tap));
 });
-
-// Auto: every 1–10 s, either lights red, green or blue and goes forward then back for the same
-// 1–3 s, or turns left for 0.5–2 s, right for twice that, then left again. Steering yourself
-// switches it off.
-let autoOn = false;
-let autoRun = 0; // bumped on every start/stop, so a stopped run can't carry on
-let autoTimer = null;
-const rand = (min, max) => min + Math.random() * (max - min);
-
-function setAuto(on) {
-  autoRun++;
-  clearTimeout(autoTimer);
-  if (autoOn) holds.move.release();
-  autoOn = on;
-  $('auto').setAttribute('aria-pressed', String(on));
-  if (on) autoLoop(autoRun);
-}
-const stopAuto = () => autoOn && setAuto(false);
-$('auto').addEventListener('click', () => setAuto(!autoOn));
-
-async function autoLoop(run) {
-  const wait = (ms) => new Promise((r) => (autoTimer = setTimeout(r, ms)));
-  const hold = async (dir, ms) => {
-    if (run !== autoRun) return;
-    holds.move.press(dir);
-    await wait(ms);
-  };
-  while (run === autoRun) {
-    await wait(rand(1000, 10000));
-    if (run !== autoRun) return;
-    if (Math.random() < 0.5) {
-      const colour = ['red', 'green', 'blue'][Math.floor(Math.random() * 3)];
-      // The colours are toggles: tapping the one that's already lit would turn it off.
-      if (document.querySelector(`[data-tap="${colour}"]`).getAttribute('aria-pressed') !== 'true') tap(colour);
-      const t = rand(1000, 3000);
-      await hold('forward', t);
-      await hold('back', t);
-    } else {
-      const t = rand(500, 2000);
-      await hold('left', t);
-      await hold('right', 2 * t);
-      await hold('left', t);
-    }
-    if (run === autoRun) holds.move.release();
-  }
-}
 
 function showSwitches(on = {}) {
   const lit = Object.values(on);

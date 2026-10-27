@@ -50,6 +50,7 @@
     <span class="chip" id="call">No call</span>
     <span class="chip" id="stand" hidden>Stand</span>
     <button id="bt" class="chip" hidden>🔵 Connect stand</button>
+    <button id="auto" class="chip" hidden>🎲 Auto: off</button>
   </div>
 </div>
 
@@ -199,6 +200,7 @@ const link = new MicrobitLink({
     setChip('stand', `Stand: ${text}`, ready ? 'ok' : 'bad');
     document.getElementById('stand').hidden = false;
     document.getElementById('bt').hidden = ready;
+    showAuto();
     broadcastStand();
   },
 });
@@ -225,6 +227,29 @@ const taps = new StandTaps({
   send: (text) => link.sendText(text),
   log: (m) => diag.log(m),
   onChange: broadcastStand,
+});
+
+// Auto runs here on the phone, so it works with no driver and no computer.
+const auto = new StandAuto({
+  stand,
+  taps,
+  log: (m) => diag.log(m),
+  onChange: () => {
+    showAuto();
+    broadcastStand();
+  },
+});
+driverNames.set(StandAuto.ID, '🎲 Auto');
+
+function showAuto() {
+  const btn = document.getElementById('auto');
+  btn.hidden = !link.ready && !auto.on;
+  setChip('auto', `🎲 Auto: ${auto.on ? 'on' : 'off'}`, auto.on ? 'ok' : '');
+}
+
+document.getElementById('auto').addEventListener('click', () => {
+  auto.set(!auto.on);
+  if (auto.on) keepAwake(); // the routine stops if the screen sleeps
 });
 
 if (MicrobitLink.supported) {
@@ -255,6 +280,7 @@ function broadcastStand() {
     controller: stand.controller ? driverNames.get(stand.controller) || 'someone' : null,
     controllerId: stand.controller,
     switches: taps.on,
+    auto: auto.on,
   };
   diagConns.forEach((conn) => conn.open && conn.send(msg));
 }
@@ -272,8 +298,10 @@ function onDiagConnection(conn) {
   };
   conn.on('data', (msg) => {
     if (diagConns.get(conn.peer) !== conn) return;
-    if (msg?.type === 'move') stand.move(conn.peer, msg.dir, msg.press !== false);
-    else if (msg?.type === 'stop') stand.stop(conn.peer);
+    if (msg?.type === 'move') {
+      if (auto.on && msg.press !== false) auto.set(false); // a driver steering takes over from Auto
+      stand.move(conn.peer, msg.dir, msg.press !== false);
+    } else if (msg?.type === 'stop') stand.stop(conn.peer);
     else if (msg?.type === 'note') piano.move(conn.peer, msg.key, msg.press !== false);
     else if (msg?.type === 'note-stop') piano.stop(conn.peer);
     else if (msg?.type === 'tap') taps.tap(msg.key);

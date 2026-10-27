@@ -240,3 +240,72 @@ class StandTaps {
     this.onChange(this);
   }
 }
+
+// Auto: every 1–10 s, either lights red, green or blue and goes forward then back for the same
+// 0.5–2 s, or turns left for 0.5–2 s, right for twice that, then left again. It drives the stand
+// like one more driver, so a real driver's press takes over.
+class StandAuto {
+  static ID = 'auto';
+
+  constructor({ stand, taps, log = () => {}, onChange = () => {} }) {
+    this.stand = stand;
+    this.taps = taps;
+    this.log = log;
+    this.onChange = onChange;
+    this.on = false;
+    this.run = 0; // bumped on every start/stop, so a stopped run can't carry on
+    this.timer = null;
+    this.refresh = null;
+  }
+
+  set(on) {
+    this.run++;
+    clearTimeout(this.timer);
+    this._release();
+    if (this.on !== on) this.log(on ? '🎲 Auto on' : '🎲 Auto off');
+    this.on = on;
+    this.onChange(this);
+    if (on) this._loop(this.run);
+  }
+
+  _hold(dir) {
+    clearInterval(this.refresh);
+    this.stand.move(StandAuto.ID, dir, true);
+    // Keep refreshing like a held button does, or the stand's watchdog lets go.
+    this.refresh = setInterval(() => this.stand.move(StandAuto.ID, dir, false), 150);
+  }
+
+  _release() {
+    clearInterval(this.refresh);
+    this.refresh = null;
+    this.stand.stop(StandAuto.ID);
+  }
+
+  async _loop(run) {
+    const rand = (min, max) => min + Math.random() * (max - min);
+    const wait = (ms) => new Promise((r) => (this.timer = setTimeout(r, ms)));
+    const hold = async (dir, ms) => {
+      if (run !== this.run) return;
+      this._hold(dir);
+      await wait(ms);
+    };
+    while (run === this.run) {
+      await wait(rand(1000, 10000));
+      if (run !== this.run) return;
+      if (Math.random() < 0.5) {
+        const colour = ['red', 'green', 'blue'][Math.floor(Math.random() * 3)];
+        // The colours are switches: tapping the one that's already lit would turn it off.
+        if (this.taps.on.light !== colour) this.taps.tap(colour);
+        const t = rand(500, 2000);
+        await hold('forward', t);
+        await hold('back', t);
+      } else {
+        const t = rand(500, 2000);
+        await hold('left', t);
+        await hold('right', 2 * t);
+        await hold('left', t);
+      }
+      if (run === this.run) this._release();
+    }
+  }
+}
