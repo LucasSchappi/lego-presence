@@ -143,12 +143,12 @@
         <button class="black" data-hold="note" data-key="laSharp" style="grid-column:12/span 2" disabled aria-label="La sharp"></button>
       </div>
       <div class="panel" data-panel="car" hidden>
-        <button data-tap="red" disabled><span class="swatch" style="background:#e53935"></span>Red</button>
-        <button data-tap="green" disabled><span class="swatch" style="background:#43a047"></span>Green</button>
-        <button data-tap="blue" disabled><span class="swatch" style="background:#1e88e5"></span>Blue</button>
-        <button data-tap="yellow" disabled><span class="swatch" style="background:#fdd835"></span>Yellow</button>
-        <button data-tap="cyan" disabled><span class="swatch" style="background:#00bcd4"></span>Cyan</button>
-        <button data-tap="pink" disabled><span class="swatch" style="background:#ff00ff"></span>Pink</button>
+        <button data-tap="red" data-switch aria-pressed="false" disabled><span class="swatch" style="background:#e53935"></span>Red</button>
+        <button data-tap="green" data-switch aria-pressed="false" disabled><span class="swatch" style="background:#43a047"></span>Green</button>
+        <button data-tap="blue" data-switch aria-pressed="false" disabled><span class="swatch" style="background:#1e88e5"></span>Blue</button>
+        <button data-tap="yellow" data-switch aria-pressed="false" disabled><span class="swatch" style="background:#fdd835"></span>Yellow</button>
+        <button data-tap="cyan" data-switch aria-pressed="false" disabled><span class="swatch" style="background:#00bcd4"></span>Cyan</button>
+        <button data-tap="pink" data-switch aria-pressed="false" disabled><span class="swatch" style="background:#ff00ff"></span>Pink</button>
         <button data-tap="lightsOff" disabled>⭘ Off</button>
       </div>
       <div class="panel" data-panel="rgb" hidden>
@@ -657,8 +657,8 @@ addEventListener('keyup', (e) => {
 });
 addEventListener('blur', release);
 
-// Lights, colour changes and modes are single taps. The light effects and modes stay on, and
-// the stand reports which, so every driver sees the same thing.
+// Lights, colour changes and modes are single taps. The light colours, effects and modes stay
+// on, and the stand reports which, so every driver sees the same thing.
 document.querySelectorAll('[data-tap]').forEach((btn) => {
   btn.addEventListener('click', () => canDrive() && send({ type: 'tap', key: btn.dataset.tap }));
 });

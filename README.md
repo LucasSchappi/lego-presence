@@ -62,12 +62,13 @@ The drive page also has every other button in the Mbit app, sending the app's ow
 | ▲ ▼ ◀ ▶, spin ↺ ↻ (held) | `A#` `B#` `C#` `D#`, `E#` `F#`; released: `0#` |
 | Music: Do Re Mi Fa So La Ti high Do (held) | `1#` … `8#`; released: `O#` |
 | Music: black keys (held) | `B1#` … `B5#`; released: `O#` |
-| Car lights: red, green, blue, yellow, cyan, pink, off | `G#` `H#` `I#` `J#` `K#` `L#`, `M#` |
+| Car lights: red, green, blue, yellow, cyan, pink (switches), off | `G#` `H#` `I#` `J#` `K#` `L#`; off: `M#` |
 | RGB lights: flowing, marquee, breathing (switches) | `N#` `P#` `Q#`; off: `W#` |
 | RGB lights: change colour | `R#` |
 | Mode: tracking, obstacle avoidance, following (switches) | `S#` `T#` `U#`; off: `V#` |
 
-Only one light effect and one mode can be on at a time; turning one on switches the other off first.
+Only one light colour, one light effect and one mode can be on at a time; turning one on switches
+the other off first. Tapping the one that's on turns it off.
 The `keys.py` and Event service outputs on the computer page only do ◀ ▶.
 
 </details>

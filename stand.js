@@ -23,12 +23,14 @@ const MBIT = {
     },
   },
   // Tapped.
-  tap: {
-    red: 'G#', green: 'H#', blue: 'I#', yellow: 'J#', cyan: 'K#', pink: 'L#', lightsOff: 'M#',
-    changeColor: 'R#',
-  },
+  tap: { changeColor: 'R#' },
   // Tap to turn on, tap again to turn off. Only one of each can be on at a time.
+  // `offButton` is a button that always sends `off`, even when we don't know what's on.
   switches: {
+    light: {
+      off: 'M#', offButton: 'lightsOff',
+      keys: { red: 'G#', green: 'H#', blue: 'I#', yellow: 'J#', cyan: 'K#', pink: 'L#' },
+    },
     effect: { off: 'W#', keys: { flow: 'N#', marquee: 'P#', breathe: 'Q#' } },
     mode: { off: 'V#', keys: { tracking: 'S#', avoid: 'T#', follow: 'U#' } },
   },
@@ -201,14 +203,14 @@ class StandControl {
   }
 }
 
-// The Mbit app's tap buttons. The light effects and the self-driving modes are switches: only
-// one of each can be on, and tapping the one that's on turns it off.
+// The Mbit app's tap buttons. The car light colours, the light effects and the self-driving
+// modes are switches: only one of each can be on, and tapping the one that's on turns it off.
 class StandTaps {
   constructor({ send, log = () => {}, onChange = () => {} }) {
     this.send = send;
     this.log = log;
     this.onChange = onChange;
-    this.on = { effect: null, mode: null };
+    this.on = Object.fromEntries(Object.keys(MBIT.switches).map((g) => [g, null]));
   }
 
   tap(key) {
@@ -217,6 +219,8 @@ class StandTaps {
       this.send(MBIT.tap[key]);
       return;
     }
+    const offGroup = Object.keys(MBIT.switches).find((g) => MBIT.switches[g].offButton === key);
+    if (offGroup) return this.turnOff(offGroup, true);
     const group = Object.keys(MBIT.switches).find((g) => Object.hasOwn(MBIT.switches[g].keys, key));
     if (!group) return;
     const wasOn = this.on[group];
@@ -228,9 +232,9 @@ class StandTaps {
     this.onChange(this);
   }
 
-  turnOff(group) {
-    if (!this.on[group]) return;
-    this.log(`○ ${this.on[group]} off`);
+  turnOff(group, always = false) {
+    if (!this.on[group] && !always) return;
+    this.log(`○ ${this.on[group] || group} off`);
     this.on[group] = null;
     this.send(MBIT.switches[group].off);
     this.onChange(this);
