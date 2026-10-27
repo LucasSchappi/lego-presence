@@ -1,5 +1,5 @@
 // Shared helpers for the three pages (drive / phone / base).
-// Signalling uses the free PeerJS cloud server; commands and status go peer-to-peer over WebRTC.
+// Signalling uses the free PeerJS cloud server; video, commands and status go peer-to-peer over WebRTC.
 
 const PEER_PREFIX = 'lego-presence-v1-';
 
@@ -52,7 +52,7 @@ navigator.connection?.addEventListener?.('change', () => {
 
 // ---- Relay (TURN) -------------------------------------------------------------
 // Direct connections often fail between different networks (mobile data, most home routers
-// on both ends). A TURN relay carries the connection when that happens. Callers must
+// on both ends). A TURN relay carries the connection and video when that happens. Callers must
 // `await iceReady` before creating a Peer so the relay is included.
 
 const iceReady = (async () => {
@@ -147,6 +147,86 @@ async function keepAwake() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') request();
   });
+}
+
+// PeerJS never gives up on a "disconnected" connection, and a closed tab only shows up as
+// "disconnected". Wi-Fi hiccups look the same but usually recover within a few seconds,
+// so only treat the connection as gone once it has stayed down for a while.
+function watchIce(mediaConnection, onGone, graceMs = 15000) {
+  const pc = mediaConnection.peerConnection;
+  if (!pc) return;
+  let timer = null;
+  pc.addEventListener('iceconnectionstatechange', () => {
+    const s = pc.iceConnectionState;
+    clearTimeout(timer);
+    if (s === 'failed' || s === 'closed') onGone();
+    else if (s === 'disconnected') {
+      timer = setTimeout(() => { diag.log(`gave up after ${graceMs / 1000}s disconnected`); onGone(); }, graceMs);
+    }
+  });
+  // Chrome reports a dead connection as "failed" here well before the grace period runs out.
+  pc.addEventListener('connectionstatechange', () => {
+    if (pc.connectionState === 'failed') { clearTimeout(timer); onGone(); }
+  });
+}
+
+// Calls `fn(stream)` once the call has media AND the connection is actually up. PeerJS's
+// 'stream' event fires as soon as the call is negotiated, even if the network then blocks
+// every route and no video ever arrives.
+function onCallConnected(mediaConnection, fn) {
+  const pc = mediaConnection.peerConnection;
+  let stream = null, done = false;
+  const check = () => {
+    if (done || !stream || !['connected', 'completed'].includes(pc.iceConnectionState)) return;
+    done = true;
+    fn(stream);
+  };
+  mediaConnection.on('stream', (s) => { stream = s; check(); });
+  pc.addEventListener('iceconnectionstatechange', check);
+}
+
+// ---- Video quality ----------------------------------------------------------
+
+// 540p is plenty for a phone screen and leaves headroom when the picture is moving.
+const CAMERA_CONSTRAINTS = { facingMode: 'user', width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 30, max: 30 } };
+
+// Video only: the phone never records sound.
+async function getCamera(contentHint) {
+  const stream = await navigator.mediaDevices.getUserMedia({ video: CAMERA_CONSTRAINTS, audio: false });
+  // "motion" tells the encoder to keep frames flowing rather than keep every frame sharp.
+  stream.getVideoTracks().forEach((t) => { if ('contentHint' in t) t.contentHint = contentHint; });
+  return stream;
+}
+
+// Caps the video bitrate and, when the network struggles, drops resolution instead of frames.
+// A rotating camera changes the whole picture at once; without a cap the encoder bursts
+// past what the Wi-Fi can carry and the video stalls.
+function tuneVideo(mediaConnection, maxBitrate) {
+  const pc = mediaConnection.peerConnection;
+  if (!pc) return () => {};
+  const apply = async () => {
+    if (pc.connectionState !== 'connected') return;
+    for (const sender of pc.getSenders()) {
+      if (sender.track?.kind !== 'video') continue;
+      const params = sender.getParameters();
+      if (!params.encodings?.length) continue;
+      params.encodings[0].maxBitrate = maxBitrate;
+      try {
+        await sender.setParameters({ ...params, degradationPreference: 'maintain-framerate' });
+      } catch {
+        // Some browsers (Safari) reject degradationPreference; keep the bitrate cap anyway.
+        try { await sender.setParameters(params); } catch (err) { console.warn('tuneVideo', err); }
+      }
+    }
+  };
+  pc.addEventListener('connectionstatechange', apply);
+  apply();
+  // Returns a function to change the cap later (e.g. when more people join).
+  return (bitrate) => {
+    if (bitrate === maxBitrate) return;
+    maxBitrate = bitrate;
+    apply();
+  };
 }
 
 function selectedPair(report) {

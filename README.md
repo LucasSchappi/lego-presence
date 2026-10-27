@@ -1,10 +1,13 @@
 # Lego Presence
 
-Browser-based remote control for a micro:bit + Lego Technic phone stand. There's no video or audio:
-the phone just drives the stand, by itself (🎲 Auto) or from a remote control page.
+Browser-based remote control for a micro:bit + Lego Technic phone stand. The phone drives the stand, by
+itself (🎲 Auto) or from a remote control page, and sends its camera **one way** to the remote control.
+The phone never shows a picture or plays or records sound: its screen stays black.
 
 ```
- Remote control (drive.html) ──── commands ────  Phone on stand (phone.html) ──► Bluetooth ──► micro:bit
+ Remote control (drive.html) ◄─── phone's camera ───  Phone on stand (phone.html)
+            │                                                 │
+            └───────────────── commands ─────────────────────►┴──► Bluetooth ──► micro:bit
             │                                                                    (or)
             └──── commands ────  Computer (base.html) ──► Bluetooth ──► micro:bit
 ```
@@ -15,14 +18,14 @@ Chrome on Android, or an app like [Bluefy](https://apps.apple.com/app/bluefy-web
 on iPhone, since iPhone Safari can't do Bluetooth. The phone page shows a **🔵 Connect stand**
 button when its browser can.
 
-- Commands travel **directly between devices** over WebRTC.
+- Video and commands travel **directly between devices** over WebRTC.
 - The free PeerJS cloud server is used only to introduce the devices to each other (signalling).
 - All the devices join the same **room name**.
 
 ## 1. Host the site (HTTPS is required)
 
-Browsers only allow Bluetooth and keeping the screen awake on HTTPS pages, so the phone and the
-remote control need a hosted copy. Any static host works, for example:
+Browsers only allow the camera, Bluetooth and keeping the screen awake on HTTPS pages, so the phone
+and the remote control need a hosted copy. Any static host works, for example:
 
 - **Netlify Drop**: drag this folder onto https://app.netlify.com/drop
 - **GitHub Pages**: push the folder to a repo, then turn on Pages in Settings
@@ -96,8 +99,9 @@ python3 keys.py                 # then open http://localhost:8765/base.html?room
 
 ## 3. Phone on the stand
 
-Open **https://your-site/phone.html?room=YOURROOM** and tap **Start**. The phone never uses its camera
-or mic. The screen stays awake and goes black apart from the small status chips at the top.
+Open **https://your-site/phone.html?room=YOURROOM**, tap **Start** and allow the camera (it never asks
+for the mic). The screen stays awake and goes black apart from the small status chips at the top; the
+camera's picture only goes to the remote control. If the camera is blocked, everything else still works.
 
 Once the phone is connected to the stand, **🎲 Auto** makes it move and change colour by itself, with
 no driver or computer needed: every 1–10 s it either lights red, green or blue and goes forward then back
@@ -106,14 +110,16 @@ Auto button too, which switches it on and off on the phone. A driver steering sw
 
 ## 4. Remote control
 
-Open **https://your-site/drive.html?room=YOURROOM** and click **Start**. To move the stand,
+Open **https://your-site/drive.html?room=YOURROOM** and click **Start**. You see the phone's camera; nothing
+from your device (no camera or mic) is sent to the phone. To move the stand,
 hold ▲ ▼ ◀ ▶ or the spin buttons ↺ ↻ (or use the arrow keys). The **Music**, **Car lights**, **RGB lights** and
 **Mode** tabs have the rest of the Mbit app's buttons. The status chips show whether the phone, the computer and
 the stand are ready.
 
 ## Several drivers at once
 
-Several people can open `drive.html` in the same room at the same time, and all of them can steer.
+Several people can open `drive.html` in the same room at the same time. All of them see the phone's camera
+(its upload is shared between them) and all of them can steer.
 **The most recent button press wins**: if someone presses while another person is holding, they take
 over. When they let go, the first person's hold carries on. Each driver's status shows who is steering.
 
@@ -143,9 +149,9 @@ control.onEvent(9010, EventBusValue.MICROBIT_EVT_ANY, function () {
 
 When everyone is on the same Wi-Fi, devices connect directly. When the remote control is somewhere
 else (another house, mobile data), many routers and mobile networks block direct connections and the
-controls never connect. The drive page then shows **"Phone: blocked between networks — needs a relay"**.
+controls and video never connect. The drive page then shows **"Phone: blocked between networks — needs a relay"**.
 
-A TURN relay fixes this by passing the commands through a server when a direct route isn't possible
+A TURN relay fixes this by passing the video and commands through a server when a direct route isn't possible
 (direct connections are still used whenever they work). To set one up (free, 20 GB/month):
 
 1. Sign up at https://www.metered.ca/stun-turn and create a TURN app.

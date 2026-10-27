@@ -25,7 +25,7 @@
   <div id="idle" class="center">
     <div class="card">
       <h1>📱 Phone · <span data-room></span></h1>
-      <p>Tap start to keep the screen on and let drivers connect.</p>
+      <p>Tap start and allow the camera. Its picture only goes to the remote control: this screen stays black.</p>
       <button id="start" class="primary">Start</button>
       <p class="note" id="bt-note" hidden style="color:var(--muted);font-size:0.85rem;margin:14px 0 0"></p>
     </div>
@@ -34,6 +34,7 @@
   <div class="top chips">
     <span class="chip" id="sig">Offline</span>
     <span class="chip" id="drivers">No drivers</span>
+    <span class="chip" id="cam" hidden>Camera</span>
     <span class="chip" id="stand" hidden>Stand</span>
     <button id="bt" class="chip" hidden>🔵 Connect stand</button>
     <button id="auto" class="chip" hidden>🎲 Auto: off</button>
@@ -49,18 +50,82 @@ const room = getRoomOrShowForm();
 const drivers = new Map();     // driver peer id → { conn, name, seen }
 const driverNames = new Map([[StandAuto.ID, '🎲 Auto']]);
 const DRIVER_TIMEOUT_MS = 4000; // drivers ping every second; closing a tab can take PeerJS ~30s to notice
+let peer = null;
 
 document.getElementById('start').addEventListener('click', async () => {
   document.getElementById('idle').hidden = true;
   keepAwake();
   document.documentElement.requestFullscreen?.().catch(() => {});
+  await startCamera();
   await iceReady;
-  makeFixedPeer(peerIds(room).phone, (t, st) => setChip('sig', t, st), (peer) => {
+  makeFixedPeer(peerIds(room).phone, (t, st) => setChip('sig', t, st), (p) => {
+    peer = p;
     setChip('sig', 'Connecting…', 'wait');
     peer.on('open', () => setChip('sig', 'Online', 'ok'));
     peer.on('connection', onDriverConnection);
   });
 });
+
+// ---- Video to the remote control -------------------------------------------
+// One way only: the phone sends its camera to each driver and never shows or plays anything.
+
+let camera = null;
+const TOTAL_BITRATE = 1_200_000; // shared between drivers so the phone's upload doesn't choke
+const VIDEO_TIMEOUT_MS = 15000;  // relayed connections can take several seconds to come up
+const videoCalls = new Map();    // driver peer id → { call, setBitrate }
+
+async function startCamera() {
+  document.getElementById('cam').hidden = false;
+  try {
+    camera = await getCamera('motion'); // the stand turns, so this camera moves
+    setChip('cam', '📷 Camera on', 'ok');
+  } catch (err) {
+    diag.log(`camera blocked: ${err.message}`);
+    setChip('cam', '📷 Camera blocked', 'bad');
+  }
+}
+
+function callDriver(id) {
+  if (!camera || !peer || !drivers.has(id)) return;
+  const name = driverNames.get(id) || id.slice(0, 8);
+  const call = peer.call(id, camera);
+  const entry = { call, setBitrate: tuneVideo(call, TOTAL_BITRATE) };
+  const old = videoCalls.get(id);
+  videoCalls.set(id, entry);
+  old?.call.close();
+  shareBitrate();
+  logConnection(call.peerConnection, `video[${name}]`);
+
+  const end = (why) => {
+    if (videoCalls.get(id) !== entry) return;
+    diag.log(`video to ${name} ended (${why})`);
+    videoCalls.delete(id);
+    shareBitrate();
+    // Call back while their control link is still up.
+    setTimeout(() => !videoCalls.has(id) && callDriver(id), 2000);
+  };
+  call.on('close', () => end('closed'));
+  call.on('error', (err) => end(`error ${err.type}`));
+  watchIce(call, () => { end('connection lost'); call.close(); });
+  setTimeout(() => {
+    if (videoCalls.get(id) === entry && call.peerConnection?.connectionState !== 'connected') {
+      end('never connected');
+      call.close();
+    }
+  }, VIDEO_TIMEOUT_MS);
+}
+
+function hangUp(id) {
+  const entry = videoCalls.get(id);
+  videoCalls.delete(id);
+  entry?.call.close();
+  shareBitrate();
+}
+
+function shareBitrate() {
+  const each = Math.max(300_000, Math.round(TOTAL_BITRATE / Math.max(1, videoCalls.size)));
+  videoCalls.forEach((v) => v.setBitrate(each));
+}
 
 // ---- Driving the stand from this phone -------------------------------------
 // Only possible where the browser has Web Bluetooth: Chrome on Android, or an app like
@@ -153,6 +218,7 @@ function broadcastStand() {
     controllerId: stand.controller,
     switches: taps.on,
     auto: auto.on,
+    camera: !!camera,
   };
   drivers.forEach(({ conn }) => conn.open && conn.send(msg));
   setChip('drivers', drivers.size ? `${drivers.size} driver${drivers.size > 1 ? 's' : ''}` : 'No drivers',
@@ -173,6 +239,7 @@ function onDriverConnection(conn) {
     stand.stop(id); // don't leave the stand moving if they vanish mid-press
     piano.stop(id);
     drivers.delete(id);
+    hangUp(id);
     if (!drivers.size) taps.turnOff('mode'); // nobody is watching it drive itself
     broadcastStand();
   };
@@ -202,6 +269,7 @@ function onDriverConnection(conn) {
     conn.send({ type: 'diag-all', lines: diag.lines });
     diag.listeners.add(push);
     broadcastStand();
+    callDriver(id);
   });
   conn.on('close', cleanup);
   conn.on('error', cleanup);
